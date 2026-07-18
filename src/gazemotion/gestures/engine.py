@@ -38,6 +38,7 @@ class GestureEngine:
         self._thumbs_since: float | None = None
         self._thumbs_latched = False
         self._last_discrete = -1e9
+        self._missing_since: float | None = None
 
     @staticmethod
     def _palm_center(hand: HandObservation) -> Point:
@@ -59,7 +60,12 @@ class GestureEngine:
     @staticmethod
     def _is_thumbs_up(hand: HandObservation) -> bool:
         points = hand.landmarks
-        thumb_vertical = points[4].y < points[3].y - 0.025 and points[3].y < points[2].y
+        # Thresholds scale with palm width so the pose reads the same whether
+        # the hand is close to the camera or across the room.
+        palm_width = max(_distance(points[5], points[17]), 1e-4)
+        thumb_vertical = (
+            points[4].y < points[3].y - 0.2 * palm_width and points[3].y < points[2].y
+        )
         curled = sum(
             points[tip].y > points[pip].y for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18))
         )
@@ -84,6 +90,23 @@ class GestureEngine:
 
     def _discrete_allowed(self, timestamp: float) -> bool:
         return timestamp - self._last_discrete >= self.settings.event_cooldown_seconds
+
+    def hold_progress(self, timestamp: float) -> dict[str, float]:
+        """Progress (0..1) of the timed holds, for UI feedback."""
+        progress = {"thumbs_up": 0.0, "pause": 0.0, "drag": 0.0}
+        if self._thumbs_since is not None and not self._thumbs_latched:
+            progress["thumbs_up"] = min(
+                (timestamp - self._thumbs_since) / self.settings.thumbs_hold_seconds, 1.0
+            )
+        if self._still_since is not None and not self._open_latched:
+            progress["pause"] = min(
+                (timestamp - self._still_since) / self.settings.open_hold_seconds, 1.0
+            )
+        if self._pinching and not self._dragging:
+            progress["drag"] = min(
+                (timestamp - self._pinch_started) / self.settings.drag_hold_seconds, 1.0
+            )
+        return progress
 
     @property
     def current_mode(self) -> str:
@@ -120,13 +143,38 @@ class GestureEngine:
         self._reset_non_pinch_holds()
         return events
 
+    def _has_active_state(self) -> bool:
+        return (
+            self._pinching
+            or self._dragging
+            or self._open_pose_since is not None
+            or self._thumbs_since is not None
+        )
+
+    def _handle_missing_frame(self, timestamp: float) -> list[GestureEvent]:
+        """Tolerate brief tracking dropouts before cancelling in-flight gestures.
+
+        Hand detection flickers for a frame or two during fast movement; without
+        a grace period every flicker ended drags and restarted hold timers.
+        """
+        if not self._has_active_state():
+            self._missing_since = None
+            return []
+        if self._missing_since is None:
+            self._missing_since = timestamp
+        if timestamp - self._missing_since < self.settings.hand_lost_grace_seconds:
+            return []
+        self._missing_since = None
+        return self._handle_missing(timestamp)
+
     def update(
         self,
         hand: HandObservation | None,
         timestamp: float,
     ) -> list[GestureEvent]:
         if hand is None:
-            return self._handle_missing(timestamp)
+            return self._handle_missing_frame(timestamp)
+        self._missing_since = None
 
         events: list[GestureEvent] = []
         metrics = self.measure(hand)

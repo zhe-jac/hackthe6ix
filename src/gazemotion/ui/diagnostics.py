@@ -24,6 +24,24 @@ class DiagnosticNotice:
     timestamp: float
 
 
+# Practice checklist cards: key, title, and two how-to lines each.
+_PRACTICE_CARDS = (
+    ("click", "1. CLICK", "Quick thumb+index pinch,", "release right away"),
+    ("drag", "2. DRAG", "Pinch and HOLD ~0.6s,", "move hand, then release"),
+    ("scroll", "3. SCROLL", "Open palm facing camera,", "sweep hand up or down"),
+    ("pause", "4. PAUSE", "Open palm held STILL", "for ~1.3 seconds"),
+    ("dictate", "5. DICTATE", "Thumbs-up pose,", "hold for ~0.7s"),
+)
+
+_EVENT_TO_CARD = {
+    GestureType.CLICK: "click",
+    GestureType.DRAG_END: "drag",
+    GestureType.SCROLL: "scroll",
+    GestureType.PAUSE_TOGGLE: "pause",
+    GestureType.DICTATION_TOGGLE: "dictate",
+}
+
+
 def _event_detail(event: GestureEvent) -> str:
     if event.type == GestureType.PINCH_START:
         return "armed only; release may click"
@@ -60,6 +78,10 @@ class DiagnosticDashboard:
         self.face_frames = 0
         self.hand_frames = 0
         self.gaze_frames = 0
+        self.completed_at: dict[str, float | None] = {
+            key: None for key, *_ in _PRACTICE_CARDS
+        }
+        self._last_timestamp = 0.0
 
     def update(
         self,
@@ -84,8 +106,12 @@ class DiagnosticDashboard:
         ):
             self.last_gaze = None
 
+        self._last_timestamp = timestamp
         events = self.gestures.update(result.hand, timestamp)
         for event in events:
+            card = _EVENT_TO_CARD.get(event.type)
+            if card is not None:
+                self.completed_at[card] = timestamp
             if event.type == GestureType.DRAG_MOVE:
                 continue
             notice = DiagnosticNotice(event.type.value.upper(), _event_detail(event), timestamp)
@@ -335,6 +361,67 @@ class DiagnosticDashboard:
             self._put(canvas, notice.detail, (x + 14, y), (170, 170, 170), 0.45)
             y += 23
 
+    def _card_state(self, key: str, progress: dict[str, float]) -> tuple[str, float]:
+        """Return (status label, hold progress 0..1) for a practice card."""
+        mode = self.gestures.current_mode
+        open_palm = self.last_metrics.open_palm if self.last_metrics else False
+        if key == "click" and mode == "pinch_armed":
+            return "ARMED - release now to click", 0.0
+        if key == "drag":
+            if mode == "dragging":
+                return "DRAGGING - release to finish", 1.0
+            if progress["drag"] > 0.0:
+                return "keep holding the pinch...", progress["drag"]
+        if key == "scroll" and open_palm:
+            return "palm seen - sweep up/down", 0.0
+        if key == "pause" and progress["pause"] > 0.0:
+            return "hold still...", progress["pause"]
+        if key == "dictate" and progress["thumbs_up"] > 0.0:
+            return "keep holding...", progress["thumbs_up"]
+        return "", 0.0
+
+    def _draw_practice(self, canvas: Any) -> None:
+        import cv2
+
+        top, height, width, gap = 733, 138, 244, 9
+        self._put(canvas, "TRY EACH GESTURE:", (14, top - 6), (170, 210, 255), 0.55, 2)
+        progress = self.gestures.hold_progress(self._last_timestamp)
+        for index, (key, title, line_one, line_two) in enumerate(_PRACTICE_CARDS):
+            left = 12 + index * (width + gap)
+            bottom = top + height
+            done_at = self.completed_at[key]
+            status, hold = self._card_state(key, progress)
+            flash = done_at is not None and self._last_timestamp - done_at < 1.2
+            if flash:
+                border, accent, thickness = (120, 255, 160), (120, 255, 160), 3
+            elif status:
+                border, accent, thickness = (100, 235, 255), (100, 235, 255), 2
+            elif done_at is not None:
+                border, accent, thickness = (70, 200, 90), (70, 235, 100), 2
+            else:
+                border, accent, thickness = (95, 95, 95), (160, 160, 160), 1
+            cv2.rectangle(canvas, (left, top), (left + width, bottom), border, thickness)
+            self._put(canvas, title, (left + 12, top + 28), accent, 0.58, 2)
+            if done_at is not None:
+                self._put(canvas, "DONE", (left + width - 62, top + 28), (70, 235, 100), 0.55, 2)
+            self._put(canvas, line_one, (left + 12, top + 56), (200, 200, 200), 0.45)
+            self._put(canvas, line_two, (left + 12, top + 76), (200, 200, 200), 0.45)
+            if status:
+                self._put(canvas, status, (left + 12, top + 103), (100, 235, 255), 0.46, 2)
+            elif done_at is None:
+                self._put(
+                    canvas, "waiting for you...", (left + 12, top + 103), (130, 130, 130), 0.44
+                )
+            if hold > 0.0:
+                bar_top = bottom - 18
+                cv2.rectangle(
+                    canvas, (left + 12, bar_top), (left + width - 12, bottom - 10), (60, 60, 60), -1
+                )
+                filled = round((width - 24) * hold)
+                cv2.rectangle(
+                    canvas, (left + 12, bar_top), (left + 12 + filled, bottom - 10), accent, -1
+                )
+
     def render(
         self,
         frame: Any,
@@ -346,6 +433,7 @@ class DiagnosticDashboard:
         self._draw_camera(canvas, frame, tracker, result)
         self._draw_screen_map(canvas)
         self._draw_status(canvas, result, fps, frame.shape)
+        self._draw_practice(canvas)
         self._put(
             canvas,
             "Esc or Q: close diagnostics   No OS actions are executed",

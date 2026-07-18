@@ -16,7 +16,8 @@ def default_config_dir() -> Path:
 class GestureSettings:
     pinch_on: float = 0.32
     pinch_off: float = 0.46
-    pinch_min_seconds: float = 0.10
+    pinch_min_seconds: float = 0.05
+    hand_lost_grace_seconds: float = 0.30
     drag_hold_seconds: float = 0.55
     drag_scale: float = 2.0
     scroll_arm_seconds: float = 0.30
@@ -44,10 +45,71 @@ class GazeSettings:
 @dataclass(slots=True)
 class VoiceSettings:
     enabled: bool = True
+    provider: str = "local"  # "auto", "elevenlabs", or "local"
+    api_key_env: str = "ELEVENLABS_API_KEY"
+    elevenlabs_model: str = "scribe_v1"
     model: str = "tiny.en"
     sample_rate: int = 16000
     device: str = "cpu"
     compute_type: str = "int8"
+
+
+@dataclass(slots=True)
+class AgentSettings:
+    """Voice command agent that turns transcripts into desktop actions.
+
+    Experimental: disabled by default until the core gesture experience is solid.
+    """
+
+    enabled: bool = False
+    provider: str = "backboard"  # "backboard", "openai-compatible", or "rules"
+    api_key_env: str = "BACKBOARD_API_KEY"
+    llm_provider: str = "openai"
+    model_name: str = "gpt-4o-mini"
+    memory: str = "Auto"
+    base_url: str = "https://app.backboard.io/api"
+    openai_base_url: str = "http://127.0.0.1:8000/v1"
+    openai_model: str = "gazemotion-intents"
+    openai_api_key_env: str = "FREESOLO_API_KEY"
+    request_timeout_seconds: float = 12.0
+
+
+@dataclass(slots=True)
+class SpeechOutputSettings:
+    """Spoken feedback through the ElevenLabs text-to-speech API.
+
+    Experimental: disabled by default until the core gesture experience is solid.
+    """
+
+    enabled: bool = False
+    api_key_env: str = "ELEVENLABS_API_KEY"
+    voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    model_id: str = "eleven_flash_v2_5"
+    output_format: str = "pcm_16000"
+    sample_rate: int = 16000
+    request_timeout_seconds: float = 10.0
+    duplicate_window_seconds: float = 2.0
+
+
+@dataclass(slots=True)
+class WellnessSettings:
+    """Contactless vitals monitoring through the Presage Physiology API.
+
+    Experimental: disabled by default until the core gesture experience is solid.
+    """
+
+    enabled: bool = False
+    api_key_env: str = "PRESAGE_API_KEY"
+    clip_seconds: float = 20.0
+    clip_fps: int = 15
+    interval_seconds: float = 180.0
+    first_sample_delay_seconds: float = 20.0
+    poll_interval_seconds: float = 10.0
+    poll_timeout_seconds: float = 240.0
+    pulse_alert_ratio: float = 1.20
+    breathing_alert_ratio: float = 1.25
+    break_reminder_minutes: float = 25.0
+    auto_pause_on_alert: bool = False
 
 
 @dataclass(slots=True)
@@ -74,6 +136,9 @@ class AppConfig:
     gestures: GestureSettings = field(default_factory=GestureSettings)
     tracking: TrackingSettings = field(default_factory=TrackingSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
+    agent: AgentSettings = field(default_factory=AgentSettings)
+    speech_output: SpeechOutputSettings = field(default_factory=SpeechOutputSettings)
+    wellness: WellnessSettings = field(default_factory=WellnessSettings)
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -92,6 +157,9 @@ class AppConfig:
             gestures=GestureSettings(**data.get("gestures", {})),
             tracking=TrackingSettings(**data.get("tracking", {})),
             voice=VoiceSettings(**data.get("voice", {})),
+            agent=AgentSettings(**data.get("agent", {})),
+            speech_output=SpeechOutputSettings(**data.get("speech_output", {})),
+            wellness=WellnessSettings(**data.get("wellness", {})),
         )
 
     def save(self, path: Path | None = None) -> Path:
@@ -117,4 +185,7 @@ class AppConfig:
             gestures=GestureSettings(**data["gestures"]),
             tracking=TrackingSettings(**data["tracking"]),
             voice=VoiceSettings(**data["voice"]),
+            agent=AgentSettings(**data["agent"]),
+            speech_output=SpeechOutputSettings(**data["speech_output"]),
+            wellness=WellnessSettings(**data["wellness"]),
         )

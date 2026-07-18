@@ -17,7 +17,8 @@
   "gestures": {
     "pinch_on": 0.32,
     "pinch_off": 0.46,
-    "pinch_min_seconds": 0.1,
+    "pinch_min_seconds": 0.05,
+    "hand_lost_grace_seconds": 0.3,
     "drag_hold_seconds": 0.55,
     "drag_scale": 2.0,
     "scroll_arm_seconds": 0.3,
@@ -42,9 +43,49 @@
   },
   "voice": {
     "enabled": true,
+    "provider": "local",
+    "api_key_env": "ELEVENLABS_API_KEY",
+    "elevenlabs_model": "scribe_v1",
     "model": "tiny.en",
     "sample_rate": 16000,
     "device": "cpu",
     "compute_type": "int8"
+  },
+  "agent": {
+    "enabled": false,
+    "provider": "backboard",
+    "api_key_env": "BACKBOARD_API_KEY",
+    "llm_provider": "openai",
+    "model_name": "gpt-4o-mini",
+    "memory": "Auto",
+    "base_url": "https://app.backboard.io/api",
+    "openai_base_url": "http://127.0.0.1:8000/v1",
+    "openai_model": "gazemotion-intents",
+    "openai_api_key_env": "FREESOLO_API_KEY",
+    "request_timeout_seconds": 12.0
+  },
+  "speech_output": {
+    "enabled": false,
+    "api_key_env": "ELEVENLABS_API_KEY",
+    "voice_id": "21m00Tcm4TlvDq8ikWAM",
+    "model_id": "eleven_flash_v2_5",
+    "output_format": "pcm_16000",
+    "sample_rate": 16000,
+    "request_timeout_seconds": 10.0,
+    "duplicate_window_seconds": 2.0
+  },
+  "wellness": {
+    "enabled": false,
+    "api_key_env": "PRESAGE_API_KEY",
+    "clip_seconds": 20.0,
+    "clip_fps": 15,
+    "interval_seconds": 180.0,
+    "first_sample_delay_seconds": 20.0,
+    "poll_interval_seconds": 10.0,
+    "poll_timeout_seconds": 240.0,
+    "pulse_alert_ratio": 1.2,
+    "breathing_alert_ratio": 1.25,
+    "break_reminder_minutes": 25.0,
+    "auto_pause_on_alert": false
   }
 }

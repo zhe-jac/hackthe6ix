@@ -31,6 +31,42 @@ def test_dashboard_renders_without_calibration_or_detections() -> None:
     assert dashboard.last_gaze is None
 
 
+def test_practice_cards_track_completed_gestures() -> None:
+    from gazemotion.core.events import HandObservation, Point
+
+    dashboard = DiagnosticDashboard(AppConfig(), profile=None)
+    points = [Point(0.5, 0.7) for _ in range(21)]
+    points[0] = Point(0.5, 0.9)
+    points[5] = Point(0.4, 0.62)
+    points[9] = Point(0.5, 0.58)
+    points[13] = Point(0.56, 0.62)
+    points[17] = Point(0.6, 0.66)
+    pinch = list(points)
+    pinch[4] = Point(0.49, 0.45)
+    pinch[8] = Point(0.51, 0.45)
+    neutral = list(points)
+    neutral[4] = Point(0.3, 0.65)
+    neutral[8] = Point(0.7, 0.75)
+    for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18)):
+        neutral[pip] = Point(neutral[tip].x, 0.64)
+        neutral[tip] = Point(neutral[tip].x, 0.76)
+
+    def result(landmarks: list[Point], t: float) -> PerceptionResult:
+        hand = HandObservation(tuple(landmarks), "right", 0.95, t)
+        return PerceptionResult(None, 0.0, hand, None)
+
+    dashboard.update(result(pinch, 0.0), 0.0)
+    dashboard.update(result(neutral, 0.2), 0.2)
+
+    assert dashboard.completed_at["click"] == 0.2
+    assert dashboard.completed_at["drag"] is None
+
+    rendered = dashboard.render(
+        np.zeros((480, 640, 3), dtype=np.uint8), FakeTracker(), result(neutral, 0.3), 10.0
+    )
+    assert rendered.shape == (900, 1760, 3)
+
+
 def test_dashboard_estimates_gaze_when_profile_is_loaded() -> None:
     profile = CalibrationProfile(
         weights_x=[0.0] * 9 + [0.25],

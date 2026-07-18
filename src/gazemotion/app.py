@@ -4,6 +4,7 @@ from time import monotonic
 from typing import Any
 
 from gazemotion.actions.base import InputAdapter
+from gazemotion.agent.agent import VoiceCommandAgent
 from gazemotion.capture.camera import OpenCVCamera
 from gazemotion.core.config import AppConfig
 from gazemotion.core.controller import DictationService, InteractionController
@@ -11,7 +12,9 @@ from gazemotion.core.events import ControllerState
 from gazemotion.gaze.model import AdaptiveGazeSmoother, CalibrationProfile, GazeEstimator
 from gazemotion.gestures.engine import GestureEngine
 from gazemotion.perception.mediapipe_tracker import MediaPipeTracker, PerceptionResult
+from gazemotion.speech.voice_out import Speaker
 from gazemotion.ui.window import close_window, window_is_open
+from gazemotion.wellness.monitor import WellnessMonitor, WellnessReport
 
 
 class GazeMotionApplication:
@@ -23,6 +26,9 @@ class GazeMotionApplication:
         screen_size: tuple[int, int],
         dictation: DictationService | None = None,
         preview: bool = False,
+        agent: VoiceCommandAgent | None = None,
+        speaker: Speaker | None = None,
+        wellness: WellnessMonitor | None = None,
     ) -> None:
         self.config = config
         self.profile = profile
@@ -30,7 +36,26 @@ class GazeMotionApplication:
         self.screen_size = screen_size
         self.dictation = dictation
         self.preview = preview
+        self.agent = agent
+        self.speaker = speaker or Speaker()
+        self.wellness = wellness
         self._running = False
+
+    def _handle_wellness(
+        self, item: WellnessReport | str, controller: InteractionController
+    ) -> None:
+        if isinstance(item, str):
+            print(item)
+            return
+        print(
+            f"Wellness: pulse {item.pulse_bpm:.0f} bpm, breathing {item.breathing_bpm:.0f} "
+            f"breaths/min ({item.assessment})"
+        )
+        for suggestion in item.suggestions:
+            print(f"Wellness: {suggestion}")
+            self.speaker.speak(suggestion)
+        if item.assessment == "elevated" and self.config.wellness.auto_pause_on_alert:
+            controller.request_pause()
 
     @staticmethod
     def _draw_preview(
@@ -92,6 +117,8 @@ class GazeMotionApplication:
             self.config.gaze.minimum_confidence,
             self.config.gaze.max_sample_age_seconds,
             self.dictation,
+            agent=self.agent,
+            announce=self.speaker.speak,
         )
 
         self._running = True
@@ -121,6 +148,11 @@ class GazeMotionApplication:
                         controller.on_gesture(event)
                     controller.poll()
 
+                    if self.wellness is not None:
+                        self.wellness.submit_frame(frame, now)
+                        for item in self.wellness.poll():
+                            self._handle_wellness(item, controller)
+
                     elapsed = max(now - last_frame_at, 1e-6)
                     instant_fps = 1.0 / elapsed
                     fps = instant_fps if fps == 0.0 else fps * 0.9 + instant_fps * 0.1
@@ -137,6 +169,9 @@ class GazeMotionApplication:
             controller.shutdown()
             if self.dictation is not None and hasattr(self.dictation, "close"):
                 self.dictation.close()  # type: ignore[attr-defined]
+            if self.wellness is not None:
+                self.wellness.close()
+            self.speaker.close()
             if self.preview:
                 close_window(cv2, "GazeMotion preview")
             self._running = False

@@ -59,6 +59,9 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--preview", action="store_true", help="show landmark and state preview")
     run.add_argument("--dry-run", action="store_true", help="recognize but do not control the OS")
     run.add_argument("--no-voice", action="store_true", help="disable microphone and transcription")
+    run.add_argument("--no-agent", action="store_true", help="type transcripts verbatim instead")
+    run.add_argument("--no-speak", action="store_true", help="disable spoken ElevenLabs feedback")
+    run.add_argument("--no-wellness", action="store_true", help="disable Presage vitals sampling")
     return parser
 
 
@@ -87,6 +90,13 @@ def _doctor(args: argparse.Namespace, config: AppConfig) -> int:
             found,
             "installed" if found else "optional; run `uv sync --extra voice`",
         )
+    for label, env in (
+        ("agent/backboard", config.agent.api_key_env),
+        ("speech/elevenlabs", config.speech_output.api_key_env),
+        ("wellness/presage", config.wellness.api_key_env),
+    ):
+        configured = bool(os.environ.get(env))
+        _print_optional(label, configured, f"{env} set" if configured else f"{env} not set")
 
     platform = inspect_platform()
     success &= _print_check(
@@ -193,16 +203,65 @@ def _run(args: argparse.Namespace, config: AppConfig) -> int:
     dictation = None
     if config.voice.enabled and not args.no_voice:
         try:
-            from gazemotion.speech.dictation import LocalDictationService
-
-            dictation = LocalDictationService(
-                config.voice.model,
-                config.voice.sample_rate,
-                config.voice.device,
-                config.voice.compute_type,
+            from gazemotion.speech.dictation import (
+                ElevenLabsDictationService,
+                LocalDictationService,
             )
+
+            stt_key = os.environ.get(config.voice.api_key_env, "")
+            if config.voice.provider in ("auto", "elevenlabs") and stt_key:
+                dictation = ElevenLabsDictationService(
+                    stt_key,
+                    config.voice.sample_rate,
+                    config.voice.elevenlabs_model,
+                )
+                print("Speech to text: ElevenLabs Scribe")
+            else:
+                if config.voice.provider == "elevenlabs":
+                    print(
+                        f"{config.voice.api_key_env} is not set; using local Whisper instead",
+                        file=sys.stderr,
+                    )
+                dictation = LocalDictationService(
+                    config.voice.model,
+                    config.voice.sample_rate,
+                    config.voice.device,
+                    config.voice.compute_type,
+                )
+                print(f"Speech to text: local Whisper ({config.voice.model})")
         except Exception as exc:
             print(f"Voice disabled: {exc}", file=sys.stderr)
+
+    agent = None
+    if config.agent.enabled and not args.no_agent and dictation is not None:
+        from gazemotion.agent.agent import VoiceCommandAgent, build_parser
+        from gazemotion.agent.intents import (
+            DesktopSystemAdapter,
+            IntentExecutor,
+            RecordingSystemAdapter,
+        )
+
+        if args.dry_run:
+            system_adapter = RecordingSystemAdapter(announce=True)
+        else:
+            system_adapter = DesktopSystemAdapter()
+        intent_parser, parser_label = build_parser(config.agent)
+        agent = VoiceCommandAgent(intent_parser, IntentExecutor(input_adapter, system_adapter))
+        print(f"Voice commands: {parser_label}")
+
+    speaker = None
+    if not args.no_speak:
+        from gazemotion.speech.voice_out import build_speaker
+
+        speaker, speaker_label = build_speaker(config.speech_output)
+        print(f"Spoken feedback: {speaker_label}")
+
+    wellness = None
+    if not args.no_wellness:
+        from gazemotion.wellness.monitor import build_wellness_monitor
+
+        wellness, wellness_label = build_wellness_monitor(config.wellness)
+        print(f"Wellness monitor: {wellness_label}")
 
     application = GazeMotionApplication(
         config,
@@ -211,6 +270,9 @@ def _run(args: argparse.Namespace, config: AppConfig) -> int:
         screen_size,
         dictation,
         args.preview,
+        agent=agent,
+        speaker=speaker,
+        wellness=wellness,
     )
     application.run()
     return 0

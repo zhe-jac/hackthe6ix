@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Protocol
 
 from gazemotion.actions.base import InputAdapter
+from gazemotion.agent.agent import AgentResult, VoiceCommandAgent
 from gazemotion.core.config import GestureSettings
 from gazemotion.core.events import (
     ControllerState,
@@ -33,6 +34,8 @@ class InteractionController:
         max_gaze_age_seconds: float = 0.30,
         dictation: DictationService | None = None,
         status: Callable[[str], None] = print,
+        agent: VoiceCommandAgent | None = None,
+        announce: Callable[[str], None] | None = None,
     ) -> None:
         self.input = input_adapter
         self.screen_size = screen_size
@@ -41,10 +44,16 @@ class InteractionController:
         self.max_gaze_age_seconds = max_gaze_age_seconds
         self.dictation = dictation
         self.status = status
+        self.agent = agent
+        self.announce = announce or (lambda _text: None)
         self.state = ControllerState.TRACKING
         self.latest_gaze: GazeSample | None = None
         self.locked_gaze: GazeSample | None = None
         self._transcription: Future[str] | None = None
+        self._agent_future: Future[AgentResult] | None = None
+        self._agent_executor: ThreadPoolExecutor | None = None
+        if agent is not None:
+            self._agent_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="agent")
 
     def _pixels(self, point: Point) -> Point:
         return Point(point.x * self.screen_size[0], point.y * self.screen_size[1])
@@ -60,6 +69,7 @@ class InteractionController:
         if self.state == ControllerState.PAUSED:
             self.state = ControllerState.TRACKING
             self.status("Tracking resumed")
+            self.announce("Tracking resumed")
             return
         if self.state == ControllerState.DRAGGING:
             self.input.mouse_up()
@@ -68,6 +78,12 @@ class InteractionController:
         self.locked_gaze = None
         self.state = ControllerState.PAUSED
         self.status("Paused: actions are disabled")
+        self.announce("Paused")
+
+    def request_pause(self) -> None:
+        """Pause from outside the gesture loop (voice command or wellness alert)."""
+        if self.state != ControllerState.PAUSED:
+            self._toggle_pause()
 
     def _toggle_dictation(self) -> None:
         if self.dictation is None:
@@ -100,7 +116,11 @@ class InteractionController:
         if event.type == GestureType.DICTATION_TOGGLE:
             self._toggle_dictation()
             return
-        if self.state in (ControllerState.DICTATING, ControllerState.TRANSCRIBING):
+        if self.state in (
+            ControllerState.DICTATING,
+            ControllerState.TRANSCRIBING,
+            ControllerState.COMMANDING,
+        ):
             return
 
         if event.type == GestureType.PINCH_START:
@@ -140,28 +160,61 @@ class InteractionController:
             amount = round(-event.delta.y * self.gestures.scroll_scale)
             self.input.scroll(amount)
 
-    def poll(self) -> None:
-        if self.state != ControllerState.TRANSCRIBING or self._transcription is None:
+    def _finish_transcription(self) -> None:
+        if self._transcription is None or not self._transcription.done():
             return
-        if not self._transcription.done():
-            return
+        transcription = self._transcription
+        self._transcription = None
         try:
-            text = self._transcription.result()
-            if text:
-                self.input.type_text(text)
-                self.input.press_enter()
-                self.status(f"Dictation submitted: {text}")
-            else:
-                self.status("No speech detected; nothing was typed")
+            text = transcription.result()
         except Exception as exc:
             self.status(f"Transcription failed: {exc}")
-        finally:
-            self._transcription = None
             self.state = ControllerState.TRACKING
+            return
+        if self.agent is not None and self._agent_executor is not None:
+            self.status(f'Heard: "{text}"' if text else "No speech detected")
+            self._agent_future = self._agent_executor.submit(self.agent.handle, text)
+            self.state = ControllerState.COMMANDING
+            return
+        if text:
+            self.input.type_text(text)
+            self.input.press_enter()
+            self.status(f"Dictation submitted: {text}")
+        else:
+            self.status("No speech detected; nothing was typed")
+        self.state = ControllerState.TRACKING
+
+    def _finish_agent(self) -> None:
+        if self._agent_future is None or not self._agent_future.done():
+            return
+        agent_future = self._agent_future
+        self._agent_future = None
+        try:
+            result = agent_future.result()
+        except Exception as exc:
+            self.status(f"Voice command failed: {exc}")
+            result = None
+        if self.state == ControllerState.COMMANDING:
+            self.state = ControllerState.TRACKING
+        if result is None:
+            return
+        if result.spoken:
+            self.status(result.spoken)
+            self.announce(result.spoken)
+        if result.pause_requested:
+            self.request_pause()
+
+    def poll(self) -> None:
+        if self.state == ControllerState.TRANSCRIBING:
+            self._finish_transcription()
+        elif self.state == ControllerState.COMMANDING:
+            self._finish_agent()
 
     def shutdown(self) -> None:
         if self.state == ControllerState.DRAGGING:
             self.input.mouse_up()
         if self.state == ControllerState.DICTATING and self.dictation:
             self.dictation.cancel()
+        if self._agent_executor is not None:
+            self._agent_executor.shutdown(wait=False, cancel_futures=True)
         self.state = ControllerState.PAUSED

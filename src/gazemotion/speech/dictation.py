@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import wave
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
@@ -100,20 +101,26 @@ class LocalDictationService:
             )
         return self._model
 
-    def _transcribe(self, audio: np.ndarray) -> str:
+    def _write_wav(self, audio: np.ndarray) -> Path | None:
+        """Persist captured audio as a temporary 16-bit WAV; None when too short."""
         if audio.size < self.sample_rate // 4:
-            return ""
+            return None
         clipped = np.clip(audio, -1.0, 1.0)
         pcm = (clipped * 32767).astype(np.int16)
-        temp_path: Path | None = None
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temporary:
+            temp_path = Path(temporary.name)
+        with wave.open(str(temp_path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(self.sample_rate)
+            wav_file.writeframes(pcm.tobytes())
+        return temp_path
+
+    def _transcribe(self, audio: np.ndarray) -> str:
+        temp_path = self._write_wav(audio)
+        if temp_path is None:
+            return ""
         try:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temporary:
-                temp_path = Path(temporary.name)
-            with wave.open(str(temp_path), "wb") as wav_file:
-                wav_file.setnchannels(1)
-                wav_file.setsampwidth(2)
-                wav_file.setframerate(self.sample_rate)
-                wav_file.writeframes(pcm.tobytes())
             segments, _info = self._get_model().transcribe(
                 str(temp_path),
                 beam_size=1,
@@ -122,9 +129,53 @@ class LocalDictationService:
             )
             return " ".join(segment.text.strip() for segment in segments).strip()
         finally:
-            if temp_path is not None:
-                temp_path.unlink(missing_ok=True)
+            temp_path.unlink(missing_ok=True)
 
     def close(self) -> None:
         self.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+
+class ElevenLabsDictationService(LocalDictationService):
+    """Capture a microphone session and transcribe it with ElevenLabs Scribe.
+
+    Reuses the local service's microphone capture; only transcription goes to
+    the cloud. The recorded WAV is deleted immediately after the request.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        sample_rate: int = 16000,
+        model_id: str = "scribe_v1",
+        request_timeout_seconds: float = 30.0,
+        transport: Callable[[Path], str] | None = None,
+    ) -> None:
+        super().__init__(sample_rate=sample_rate)
+        self.api_key = api_key
+        self.stt_model_id = model_id
+        self.request_timeout_seconds = request_timeout_seconds
+        self._transport = transport or self._request_transcript
+
+    def _request_transcript(self, wav_path: Path) -> str:
+        import requests
+
+        with wav_path.open("rb") as handle:
+            response = requests.post(
+                "https://api.elevenlabs.io/v1/speech-to-text",
+                headers={"xi-api-key": self.api_key},
+                data={"model_id": self.stt_model_id},
+                files={"file": ("dictation.wav", handle, "audio/wav")},
+                timeout=self.request_timeout_seconds,
+            )
+        response.raise_for_status()
+        return str(response.json().get("text", "")).strip()
+
+    def _transcribe(self, audio: np.ndarray) -> str:
+        temp_path = self._write_wav(audio)
+        if temp_path is None:
+            return ""
+        try:
+            return self._transport(temp_path)
+        finally:
+            temp_path.unlink(missing_ok=True)

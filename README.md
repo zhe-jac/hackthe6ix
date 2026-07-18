@@ -1,7 +1,10 @@
 # GazeMotion
 
 GazeMotion is a local desktop-control prototype that uses webcam gaze estimation to position
-the pointer, hand gestures to act, and optional offline speech recognition to enter text.
+the pointer, hand gestures to act, and speech for both dictation and natural-language
+commands. Dictated speech runs through a voice command agent that can open apps and
+websites, search the web, scroll, and press shortcuts; spoken feedback confirms every
+action, and an optional wellness monitor watches for fatigue using contactless vitals.
 
 The current MVP intentionally uses raw operating-system mouse and keyboard events. It can
 therefore work outside a browser, but it does not yet understand whether a screen coordinate
@@ -16,7 +19,53 @@ contains a button or text field.
 | Pinch and hold | Start a drag; move the hand to drag and release to drop |
 | Open palm moved vertically | Scroll |
 | Open palm held still | Pause or resume all actions |
-| Thumbs-up held | Start dictation; repeat to transcribe, type, and press Enter |
+| Thumbs-up held | Start dictation; repeat to run the transcript through the voice agent |
+
+## Voice command agent
+
+Anything you dictate is interpreted as either a command or plain text. Say
+"open youtube dot com", "search for accessible input devices", "scroll down",
+"select all", or "stop listening" and the matching desktop action runs; anything
+else is typed into the focused field like regular dictation.
+
+Three interchangeable parsers implement the same interface:
+
+- **Backboard** (default): set `BACKBOARD_API_KEY` and transcripts are parsed by an LLM
+  through the [Backboard.io](https://backboard.io) unified API. One Backboard thread is
+  kept per session and Backboard memory is enabled, so context carries across commands
+  and sessions.
+- **Offline rules**: a regex grammar used automatically when no key is set or the
+  network fails mid-demo. No cloud, no latency.
+- **Local model**: any OpenAI-compatible endpoint (`agent.provider: "openai-compatible"`),
+  intended for a [Freesolo](https://freesolo.co) post-trained intent model that understands
+  natural phrasings ("bring up the calculator") offline. The rule grammar scores 0% on
+  those; `training/freesolo/` has the dataset, the evaluation harness that proves the
+  gap, and the workflow to close it.
+
+## ElevenLabs voice: hear and speak
+
+Set `ELEVENLABS_API_KEY` and ElevenLabs handles both sides of the conversation:
+
+- **Speech to text (Scribe)**: when you dictate, the recording is transcribed by the
+  ElevenLabs Scribe model instead of the small local Whisper model — noticeably more
+  accurate for command phrases. Whisper remains the automatic offline fallback, and
+  `voice.provider` can force either engine.
+- **Text to speech**: GazeMotion speaks confirmations — "Opening github.com", "Paused",
+  wellness suggestions — through the ElevenLabs TTS API. Audio arrives as raw PCM and
+  plays through the existing sounddevice stack; repeated messages are deduplicated and
+  playback never blocks the camera loop.
+
+Without the key, dictation uses local Whisper and feedback is print-only.
+
+## Wellness monitor (Presage)
+
+Set `PRESAGE_API_KEY` and GazeMotion periodically records a short clip from the webcam
+feed it is already processing and sends it to the
+[Presage SmartSpectra Physiology API](https://physiology.presagetech.com) for contactless
+pulse and breathing measurement. Readings are compared against your session baseline to
+suggest breaks or breathing resets — long hands-free sessions are exactly where fatigue
+creeps in. Clips are deleted immediately after upload and vitals are never persisted.
+Set `wellness.auto_pause_on_alert` to pause input automatically when vitals run high.
 
 Press `Esc` in the optional preview window, or `Ctrl+C` in the terminal, for an emergency stop.
 
@@ -53,10 +102,22 @@ uv run gazemotion run --dry-run --preview
 ## Commands
 
 ```text
-gazemotion doctor                       Check dependencies, display, camera, and calibration
+gazemotion doctor                       Check dependencies, display, camera, calibration, and API keys
 gazemotion calibrate [--camera 0]       Run nine-point gaze calibration
 gazemotion test [--camera 0]            Safely inspect tracking, gaze, and gesture triggers
 gazemotion run [--preview] [--dry-run]  Start desktop control
+```
+
+`run` also accepts `--no-agent` (type transcripts verbatim), `--no-speak`, and
+`--no-wellness`. With `--dry-run`, voice commands print what they would do instead of
+launching anything.
+
+API keys are read from environment variables only and are never written to disk:
+
+```text
+BACKBOARD_API_KEY    LLM intent parsing (Backboard.io)
+ELEVENLABS_API_KEY   Spoken feedback (ElevenLabs)
+PRESAGE_API_KEY      Contactless vitals (Presage SmartSpectra)
 ```
 
 ## Tracking diagnostics

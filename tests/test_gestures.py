@@ -146,8 +146,54 @@ def test_thumbs_up_toggles_dictation_once() -> None:
     assert engine.update(_hand("thumbs", 0.8), 0.8) == []
 
 
-def test_lost_hand_cancels_active_pinch() -> None:
-    engine = GestureEngine()
+def test_lost_hand_cancels_active_pinch_after_grace() -> None:
+    engine = GestureEngine(GestureSettings(hand_lost_grace_seconds=0.3))
     engine.update(_hand("pinch", 0.0), 0.0)
 
-    assert _types(engine.update(None, 0.1)) == [GestureType.PINCH_CANCEL]
+    assert engine.update(None, 0.1) == []  # inside the grace window
+    assert _types(engine.update(None, 0.5)) == [GestureType.PINCH_CANCEL]
+
+
+def test_drag_survives_brief_tracking_dropout() -> None:
+    engine = GestureEngine(GestureSettings(drag_hold_seconds=0.5, hand_lost_grace_seconds=0.3))
+    engine.update(_hand("pinch", 0.0), 0.0)
+    assert _types(engine.update(_hand("pinch", 0.6), 0.6)) == [GestureType.DRAG_START]
+
+    assert engine.update(None, 0.65) == []  # one flickered frame
+    assert engine.update(None, 0.70) == []
+    moved = engine.update(_hand("pinch", 0.75, 0.03), 0.75)
+    assert _types(moved) == [GestureType.DRAG_MOVE]
+    assert _types(engine.update(_hand("neutral", 0.9, 0.03), 0.9)) == [GestureType.DRAG_END]
+
+
+def test_quick_pinch_with_flicker_still_clicks() -> None:
+    engine = GestureEngine(GestureSettings(pinch_min_seconds=0.05, hand_lost_grace_seconds=0.3))
+    engine.update(_hand("pinch", 0.0), 0.0)
+
+    assert engine.update(None, 0.05) == []
+    assert engine.update(_hand("pinch", 0.1), 0.1) == []
+    assert _types(engine.update(_hand("neutral", 0.2), 0.2)) == [GestureType.CLICK]
+
+
+def test_missing_hand_with_no_active_gesture_is_silent() -> None:
+    engine = GestureEngine()
+    assert engine.update(None, 0.0) == []
+    assert engine.update(None, 5.0) == []
+
+
+def _scaled_hand(kind: str, timestamp: float, scale: float) -> HandObservation:
+    original = _hand(kind, timestamp)
+    center = Point(0.5, 0.7)
+    points = tuple(
+        Point(center.x + (p.x - center.x) * scale, center.y + (p.y - center.y) * scale)
+        for p in original.landmarks
+    )
+    return HandObservation(points, original.handedness, original.confidence, timestamp)
+
+
+def test_thumbs_up_detected_for_small_far_away_hand() -> None:
+    engine = GestureEngine(GestureSettings(thumbs_hold_seconds=0.5, event_cooldown_seconds=0.1))
+
+    engine.update(_scaled_hand("thumbs", 0.0, scale=0.1), 0.0)
+    events = engine.update(_scaled_hand("thumbs", 0.6, scale=0.1), 0.6)
+    assert _types(events) == [GestureType.DICTATION_TOGGLE]

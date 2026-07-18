@@ -64,4 +64,5 @@ class ControllerState(str, Enum):
     DRAGGING = "dragging"
     DICTATING = "dictating"
     TRANSCRIBING = "transcribing"
+    COMMANDING = "commanding"
     PAUSED = "paused"

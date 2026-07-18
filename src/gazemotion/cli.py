@@ -43,6 +43,13 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=default_config_dir() / "calibration.json",
     )
+    calibrate.add_argument(
+        "--grid-size",
+        type=int,
+        choices=(5, 7),
+        default=5,
+        help="dense calibration grid size; 7 is slower but covers more positions",
+    )
 
     test = subparsers.add_parser(
         "test",
@@ -226,7 +233,10 @@ def _calibrate(args: argparse.Namespace, config: AppConfig) -> int:
         fourcc=config.camera_fourcc,
         mirror=config.mirror_camera,
     )
-    print("Starting nine-point calibration. Keep your head comfortable and follow each dot.")
+    print(
+        f"Starting {args.grid_size}x{args.grid_size} dense calibration plus validation. "
+        "Keep your head still and follow each dot with your eyes."
+    )
     with camera, MediaPipeTracker(max_hands=1, settings=config.tracking) as tracker:
         profile = run_calibration(
             camera,
@@ -234,9 +244,16 @@ def _calibrate(args: argparse.Namespace, config: AppConfig) -> int:
             screen_size,
             camera_index,
             config.gaze.ridge_alpha,
+            grid_size=args.grid_size,
+            minimum_confidence=config.gaze.minimum_confidence,
         )
     saved = profile.save(args.profile)
-    print(f"Calibration saved to {saved}")
+    median = profile.validation_median_error_px or 0.0
+    p95 = profile.validation_p95_error_px or 0.0
+    print(
+        f"Calibration saved to {saved} (model={profile.model_type}, "
+        f"validation median={median:.0f}px, p95={p95:.0f}px)"
+    )
     return 0
 
 
@@ -302,8 +319,11 @@ def _test(args: argparse.Namespace, config: AppConfig) -> int:
     config.camera_index = camera_index
     profile = None
     if args.profile.exists():
-        profile = CalibrationProfile.load(args.profile)
-        print(f"Loaded gaze calibration from {args.profile}")
+        try:
+            profile = CalibrationProfile.load(args.profile)
+            print(f"Loaded gaze calibration from {args.profile}")
+        except ValueError as exc:
+            print(f"Gaze calibration disabled: {exc}", file=sys.stderr)
     else:
         print(f"No calibration found at {args.profile}; showing face and gesture diagnostics only.")
     run_diagnostics(config, profile, camera_index, ide_mode=args.ide)

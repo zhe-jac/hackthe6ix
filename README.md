@@ -59,6 +59,12 @@ MediaPipe face and hand model assets are also downloaded into the user cache on 
 optional tuning template is provided in `config.example.json`; pass a copied file with
 `--config /path/to/config.json`.
 
+Gaze calibration uses a dense 5x5 target grid, balanced per-target samples, robust outlier and
+blink rejection, and a separate nine-target validation pass. It compares regularized linear and
+nonlinear gaze mappings and saves the simpler model unless the nonlinear mapping produces a
+meaningful validation improvement. Runtime motion is stabilized with time-aware low-lag
+filtering. Calibration profiles are model versioned; rerun `gazemotion calibrate` when prompted.
+
 On Linux, raw input libraries normally require an X11 session. Wayland compositors may block
 synthetic global input. Start with `--dry-run --preview` if you are unsure:
 
@@ -128,7 +134,7 @@ left untouched. If Windows `uv` is missing, install it once from PowerShell with
 
 ```text
 gazemotion doctor [--ide]               Check runtime hardware and optionally the VS Code bridge
-gazemotion calibrate [--camera 0]       Run nine-point gaze calibration
+gazemotion calibrate [--grid-size 5|7]  Run dense gaze calibration and validation
 gazemotion test [--camera 0]            Safely inspect tracking, gaze, and gesture triggers
 gazemotion run [--preview] [--dry-run]  Start desktop control
 gazemotion ide [--preview] [--dry-run]  Start semantic two-hand VS Code control
@@ -146,12 +152,14 @@ This mode never emits operating-system mouse or keyboard actions. Its dashboard 
 
 - Live camera with eye/iris landmarks and the complete hand skeleton
 - Whether the face and hand models are producing landmarks
-- Raw iris features used by calibration
+- Head-normalized gaze readiness, feature count, blink state, and eye openness
 - Pinch ratio and its configured activation threshold
 - Open-palm and thumbs-up classifier results
 - Recent click, drag, scroll, pause, and dictation gesture events
 - Loaded calibration metadata
+- Calibration model and held-out median/p95 error
 - A mini screen containing the current calibrated gaze position
+- A full-dashboard gaze reticle, enabled by default and toggled with `G`
 - Practice cards with live hold progress and persistent completion markers for every gesture
 
 The camera panel preserves a 1280x720 source at native size on a 1920x1080 or larger display.
@@ -169,8 +177,12 @@ survive brief hand-tracking flicker; uncommitted pinches use a shorter grace win
 that occur while the hand is missing are cancelled instead of clicked. Pause and dictation hold
 timers restart after tracking loss.
 
-Calibration profiles contain only regression coefficients and screen/camera metadata. Camera
-frames and microphone recordings are never persisted by default.
+Calibration profiles contain only feature normalization statistics, regression coefficients, and
+screen/camera metadata. Camera frames and microphone recordings are never persisted by default.
+
+The head-normalized gaze feature selection and pose normalization are adapted from
+[EyeTrax](https://github.com/ck-zhang/EyeTrax) under its MIT license; the license notice is shipped
+with the gaze module.
 
 ## Development
 

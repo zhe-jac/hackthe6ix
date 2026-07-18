@@ -6,13 +6,14 @@
   "camera_fourcc": "MJPG",
   "mirror_camera": true,
   "gaze": {
-    "smoothing_slow": 0.2,
-    "smoothing_fast": 0.62,
-    "fast_speed_threshold": 0.06,
-    "stable_speed_threshold": 0.018,
+    "smoothing_min_cutoff": 1.25,
+    "smoothing_beta": 8.0,
+    "smoothing_derivative_cutoff": 1.0,
+    "smoothing_deadzone": 0.0035,
+    "stable_speed_threshold": 0.12,
     "minimum_confidence": 0.55,
     "max_sample_age_seconds": 0.3,
-    "ridge_alpha": 0.02
+    "ridge_alpha": 1.0
   },
   "gestures": {
     "pinch_on": 0.32,
@@ -40,7 +41,11 @@
     "hand_presence_confidence": 0.72,
     "hand_tracking_confidence": 0.65,
     "hand_confirmation_frames": 3,
-    "hand_candidate_max_jump": 0.25
+    "hand_candidate_max_jump": 0.25,
+    "gaze_ear_history_frames": 50,
+    "gaze_blink_threshold_ratio": 0.8,
+    "gaze_blink_min_history_frames": 15,
+    "gaze_full_confidence_inter_eye_distance": 0.08
   },
   "voice": {
     "enabled": true,

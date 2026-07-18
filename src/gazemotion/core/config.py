@@ -34,13 +34,14 @@ class GestureSettings:
 
 @dataclass(slots=True)
 class GazeSettings:
-    smoothing_slow: float = 0.20
-    smoothing_fast: float = 0.62
-    fast_speed_threshold: float = 0.06
-    stable_speed_threshold: float = 0.018
+    smoothing_min_cutoff: float = 1.25
+    smoothing_beta: float = 8.0
+    smoothing_derivative_cutoff: float = 1.0
+    smoothing_deadzone: float = 0.0035
+    stable_speed_threshold: float = 0.12
     minimum_confidence: float = 0.55
     max_sample_age_seconds: float = 0.30
-    ridge_alpha: float = 0.02
+    ridge_alpha: float = 1.0
 
 
 @dataclass(slots=True)
@@ -62,6 +63,10 @@ class TrackingSettings:
     hand_tracking_confidence: float = 0.65
     hand_confirmation_frames: int = 3
     hand_candidate_max_jump: float = 0.25
+    gaze_ear_history_frames: int = 50
+    gaze_blink_threshold_ratio: float = 0.80
+    gaze_blink_min_history_frames: int = 15
+    gaze_full_confidence_inter_eye_distance: float = 0.08
 
 
 @dataclass(slots=True)
@@ -98,6 +103,16 @@ class AppConfig:
         if not path.exists():
             return cls()
         data = json.loads(path.read_text(encoding="utf-8"))
+        gaze_data = dict(data.get("gaze", {}))
+        legacy_smoothing = any(
+            key in gaze_data
+            for key in ("smoothing_slow", "smoothing_fast", "fast_speed_threshold")
+        )
+        for legacy_key in ("smoothing_slow", "smoothing_fast", "fast_speed_threshold"):
+            gaze_data.pop(legacy_key, None)
+        if legacy_smoothing:
+            gaze_data.pop("stable_speed_threshold", None)
+            gaze_data.pop("ridge_alpha", None)
         return cls(
             camera_index=int(data.get("camera_index", 0)),
             camera_width=int(data.get("camera_width", 1280)),
@@ -105,7 +120,7 @@ class AppConfig:
             camera_fps=int(data.get("camera_fps", 30)),
             camera_fourcc=str(data.get("camera_fourcc", "MJPG")),
             mirror_camera=bool(data.get("mirror_camera", True)),
-            gaze=GazeSettings(**data.get("gaze", {})),
+            gaze=GazeSettings(**gaze_data),
             gestures=GestureSettings(**data.get("gestures", {})),
             tracking=TrackingSettings(**data.get("tracking", {})),
             voice=VoiceSettings(**data.get("voice", {})),

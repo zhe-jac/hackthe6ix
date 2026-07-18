@@ -8,6 +8,7 @@ from typing import Any
 
 from gazemotion.core.config import TrackingSettings
 from gazemotion.core.events import GazeFeatures, HandObservation, Point
+from gazemotion.gaze.features import HeadNormalizedGazeExtractor
 from gazemotion.perception.models import ensure_model
 
 
@@ -22,6 +23,8 @@ class PerceptionResult:
     hands: tuple[HandObservation, ...] = ()
     hand_candidates: tuple[HandObservation, ...] = ()
     hand_confirmation_progresses: tuple[int, ...] = ()
+    blink_detected: bool = False
+    eye_aspect_ratio: float | None = None
 
 
 @dataclass(slots=True)
@@ -37,8 +40,6 @@ class MediaPipeTracker:
 
     RIGHT_IRIS = (469, 470, 471, 472)
     LEFT_IRIS = (474, 475, 476, 477)
-    RIGHT_EYE = (33, 133, 159, 145)
-    LEFT_EYE = (362, 263, 386, 374)
     RIGHT_EYE_RING = (33, 160, 158, 133, 153, 144, 33)
     LEFT_EYE_RING = (362, 385, 387, 263, 373, 380, 362)
     HAND_CONNECTIONS = (
@@ -109,17 +110,16 @@ class MediaPipeTracker:
         self._hand_confirmed = False
         self._hand_tracks: dict[int, _HandTrackState] = {}
         self._next_hand_track_id = 1
+        self._gaze_extractor = HeadNormalizedGazeExtractor(
+            self.settings.gaze_ear_history_frames,
+            self.settings.gaze_blink_threshold_ratio,
+            self.settings.gaze_blink_min_history_frames,
+            self.settings.gaze_full_confidence_inter_eye_distance,
+        )
 
     @staticmethod
     def _points(landmarks: Iterable[Any]) -> tuple[Point, ...]:
         return tuple(Point(float(item.x), float(item.y)) for item in landmarks)
-
-    @staticmethod
-    def _mean(points: tuple[Point, ...], indices: tuple[int, ...]) -> Point:
-        return Point(
-            sum(points[i].x for i in indices) / len(indices),
-            sum(points[i].y for i in indices) / len(indices),
-        )
 
     @staticmethod
     def _hand_center(hand: HandObservation) -> Point:
@@ -235,50 +235,6 @@ class MediaPipeTracker:
         progress = tuple(track.confirmation_frames for track in ordered)
         return confirmed, candidates, progress
 
-    @classmethod
-    def extract_gaze_features(cls, points: tuple[Point, ...]) -> GazeFeatures | None:
-        if len(points) < 478:
-            return None
-
-        right_iris = cls._mean(points, cls.RIGHT_IRIS)
-        left_iris = cls._mean(points, cls.LEFT_IRIS)
-
-        def relative_eye(iris: Point, eye: tuple[int, int, int, int]) -> tuple[float, float]:
-            corner_a, corner_b, upper, lower = (points[i] for i in eye)
-            width = max(abs(corner_b.x - corner_a.x), 1e-4)
-            height = max(abs(lower.y - upper.y), 1e-4)
-            min_x = min(corner_a.x, corner_b.x)
-            min_y = min(upper.y, lower.y)
-            return ((iris.x - min_x) / width, (iris.y - min_y) / height)
-
-        right_x, right_y = relative_eye(right_iris, cls.RIGHT_EYE)
-        left_x, left_y = relative_eye(left_iris, cls.LEFT_EYE)
-
-        nose = points[1]
-        left_face = points[234]
-        right_face = points[454]
-        face_width = max(abs(right_face.x - left_face.x), 1e-4)
-        eye_midpoint = Point(
-            (points[33].x + points[263].x) / 2,
-            (points[33].y + points[263].y) / 2,
-        )
-        head_x = (nose.x - eye_midpoint.x) / face_width
-        head_y = (nose.y - eye_midpoint.y) / face_width
-
-        return GazeFeatures(
-            (
-                right_x,
-                right_y,
-                left_x,
-                left_y,
-                head_x,
-                head_y,
-                nose.x,
-                nose.y,
-                face_width,
-            )
-        )
-
     def process(self, bgr_frame: Any, timestamp: float | None = None) -> PerceptionResult:
         import cv2
 
@@ -293,10 +249,16 @@ class MediaPipeTracker:
         face_points: tuple[Point, ...] | None = None
         gaze_features: GazeFeatures | None = None
         gaze_confidence = 0.0
+        blink_detected = False
+        eye_aspect_ratio: float | None = None
         if face_result.face_landmarks:
-            face_points = self._points(face_result.face_landmarks[0])
-            gaze_features = self.extract_gaze_features(face_points)
-            gaze_confidence = 0.9 if gaze_features is not None else 0.0
+            raw_face_landmarks = face_result.face_landmarks[0]
+            face_points = self._points(raw_face_landmarks)
+            gaze_observation = self._gaze_extractor.extract(raw_face_landmarks)
+            gaze_features = gaze_observation.features
+            gaze_confidence = gaze_observation.confidence
+            blink_detected = gaze_observation.blink_detected
+            eye_aspect_ratio = gaze_observation.eye_aspect_ratio
 
         raw_hands: list[HandObservation] = []
         handedness_results = hand_result.handedness or []
@@ -332,6 +294,8 @@ class MediaPipeTracker:
             hands,
             candidates,
             progresses,
+            blink_detected,
+            eye_aspect_ratio,
         )
 
     def draw_debug(self, frame: Any, result: PerceptionResult) -> Any:

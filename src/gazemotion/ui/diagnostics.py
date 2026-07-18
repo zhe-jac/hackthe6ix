@@ -64,10 +64,11 @@ class DiagnosticDashboard:
         self.gaze: GazeEstimator | None = None
         if profile is not None:
             smoother = AdaptiveGazeSmoother(
-                config.gaze.smoothing_slow,
-                config.gaze.smoothing_fast,
-                config.gaze.fast_speed_threshold,
-                config.gaze.stable_speed_threshold,
+                min_cutoff=config.gaze.smoothing_min_cutoff,
+                beta=config.gaze.smoothing_beta,
+                derivative_cutoff=config.gaze.smoothing_derivative_cutoff,
+                deadzone=config.gaze.smoothing_deadzone,
+                stable_speed_threshold=config.gaze.stable_speed_threshold,
             )
             self.gaze = GazeEstimator(profile, smoother)
         self.last_gaze: GazeSample | None = None
@@ -77,10 +78,49 @@ class DiagnosticDashboard:
         self.face_frames = 0
         self.hand_frames = 0
         self.gaze_frames = 0
-        self.completed_at: dict[str, float | None] = {
-            key: None for key, *_ in _PRACTICE_CARDS
-        }
+        self.completed_at: dict[str, float | None] = {key: None for key, *_ in _PRACTICE_CARDS}
+        self.full_gaze_overlay = True
+        self._screen_size: tuple[int, int] | None = None
+        self._window_rect: tuple[int, int, int, int] | None = None
         self._last_timestamp = 0.0
+
+    def set_gaze_overlay_geometry(
+        self,
+        screen_size: tuple[int, int] | None,
+        window_rect: tuple[int, int, int, int] | None,
+    ) -> None:
+        self._screen_size = screen_size
+        self._window_rect = window_rect
+
+    def toggle_gaze_overlay(self) -> bool:
+        self.full_gaze_overlay = not self.full_gaze_overlay
+        return self.full_gaze_overlay
+
+    def _gaze_canvas_point(self) -> tuple[int, int] | None:
+        if self.last_gaze is None:
+            return None
+
+        point = self.last_gaze.point
+        if self._screen_size is not None and self._window_rect is not None:
+            screen_width, screen_height = self._screen_size
+            left, top, window_width, window_height = self._window_rect
+            if window_width > 0 and window_height > 0:
+                screen_x = point.x * screen_width
+                screen_y = point.y * screen_height
+                x = round((screen_x - left) * self.WIDTH / window_width)
+                y = round((screen_y - top) * self.HEIGHT / window_height)
+            else:
+                x = round(point.x * self.WIDTH)
+                y = round(point.y * self.HEIGHT)
+        else:
+            x = round(point.x * self.WIDTH)
+            y = round(point.y * self.HEIGHT)
+
+        margin = 32
+        return (
+            min(max(x, margin), self.WIDTH - margin),
+            min(max(y, margin), self.HEIGHT - margin),
+        )
 
     def update(
         self,
@@ -199,12 +239,22 @@ class DiagnosticDashboard:
             return
 
         point = self.last_gaze.point
-        x = round(left + point.x * width)
-        y = round(top + point.y * height)
         color = (70, 255, 120) if self.last_gaze.stable else (0, 190, 255)
-        cv2.circle(canvas, (x, y), 14, color, 2, cv2.LINE_AA)
-        cv2.line(canvas, (x - 22, y), (x + 22, y), color, 1, cv2.LINE_AA)
-        cv2.line(canvas, (x, y - 22), (x, y + 22), color, 1, cv2.LINE_AA)
+        if self.full_gaze_overlay:
+            self._put(
+                canvas,
+                "Full-dashboard marker ON (G to toggle)",
+                (left + 12, top + 32),
+                color,
+                0.52,
+                2,
+            )
+        else:
+            x = round(left + point.x * width)
+            y = round(top + point.y * height)
+            cv2.circle(canvas, (x, y), 14, color, 2, cv2.LINE_AA)
+            cv2.line(canvas, (x - 22, y), (x + 22, y), color, 1, cv2.LINE_AA)
+            cv2.line(canvas, (x, y - 22), (x, y + 22), color, 1, cv2.LINE_AA)
         self._put(
             canvas,
             f"x={point.x * 100:5.1f}%  y={point.y * 100:5.1f}%  "
@@ -214,6 +264,31 @@ class DiagnosticDashboard:
             0.52,
             2,
         )
+
+    def _draw_full_gaze_overlay(self, canvas: Any) -> None:
+        if not self.full_gaze_overlay:
+            return
+        location = self._gaze_canvas_point()
+        if location is None or self.last_gaze is None:
+            return
+
+        import cv2
+
+        x, y = location
+        color = (70, 255, 120) if self.last_gaze.stable else (0, 190, 255)
+        shadow = (15, 15, 15)
+        cv2.circle(canvas, location, 24, shadow, 7, cv2.LINE_AA)
+        cv2.circle(canvas, location, 24, color, 3, cv2.LINE_AA)
+        cv2.circle(canvas, location, 5, shadow, -1, cv2.LINE_AA)
+        cv2.circle(canvas, location, 3, color, -1, cv2.LINE_AA)
+        cv2.line(canvas, (x - 38, y), (x + 38, y), shadow, 6, cv2.LINE_AA)
+        cv2.line(canvas, (x, y - 38), (x, y + 38), shadow, 6, cv2.LINE_AA)
+        cv2.line(canvas, (x - 38, y), (x + 38, y), color, 2, cv2.LINE_AA)
+        cv2.line(canvas, (x, y - 38), (x, y + 38), color, 2, cv2.LINE_AA)
+        label_x = min(x + 30, self.WIDTH - 125)
+        label_y = max(y - 28, 28)
+        self._put(canvas, "GAZE", (label_x, label_y), shadow, 0.62, 5)
+        self._put(canvas, "GAZE", (label_x, label_y), color, 0.62, 2)
 
     def _draw_status(
         self,
@@ -228,28 +303,34 @@ class DiagnosticDashboard:
         self._put(canvas, "GAZEMOTION DIAGNOSTICS", (x, y), (100, 220, 255), 0.72, 2)
         y += 42
         face_count = len(result.face_landmarks) if result.face_landmarks else 0
+        face_detected = result.face_landmarks is not None
         self._put(
             canvas,
-            f"Face/iris: {'YES' if result.gaze_features else 'NO'} ({face_count} points)",
+            f"Face landmarks: {'YES' if face_detected else 'NO'} ({face_count} points)",
             (x, y),
-            (70, 235, 100) if result.gaze_features else (80, 110, 255),
+            (70, 235, 100) if face_detected else (80, 110, 255),
             0.60,
             2,
         )
         y += line
-        if result.gaze_features:
-            right_x, right_y, left_x, left_y = result.gaze_features.values[:4]
+        gaze_state = (
+            "BLINK - POINTER HELD"
+            if result.blink_detected
+            else ("READY" if result.gaze_features is not None else "UNAVAILABLE")
+        )
+        gaze_color = (
+            (80, 190, 255)
+            if result.blink_detected
+            else ((70, 235, 100) if result.gaze_features is not None else (80, 110, 255))
+        )
+        self._put(canvas, f"Head-normalized gaze: {gaze_state}", (x, y), gaze_color, 0.54, 2)
+        y += 22
+        if result.eye_aspect_ratio is not None:
             self._put(
                 canvas,
-                f"Raw iris R=({right_x:+.2f},{right_y:+.2f})",
-                (x, y),
-                (175, 175, 175),
-                0.48,
-            )
-            y += 22
-            self._put(
-                canvas,
-                f"Raw iris L=({left_x:+.2f},{left_y:+.2f})",
+                f"Features: {len(result.gaze_features.values) if result.gaze_features else 486}  "
+                f"eye openness={result.eye_aspect_ratio:.3f}  "
+                f"confidence={result.gaze_confidence:.2f}",
                 (x, y),
                 (175, 175, 175),
                 0.48,
@@ -340,6 +421,16 @@ class DiagnosticDashboard:
                 canvas, f"Profile: LOADED ({self.profile.created_at[:10]})", (x, y), (70, 235, 100)
             )
             y += line
+            self._put(canvas, f"Model: {self.profile.model_type}", (x, y))
+            y += line
+            if self.profile.validation_median_error_px is not None:
+                self._put(
+                    canvas,
+                    f"Validation: median {self.profile.validation_median_error_px:.0f}px  "
+                    f"p95 {self.profile.validation_p95_error_px or 0.0:.0f}px",
+                    (x, y),
+                )
+                y += line
             self._put(
                 canvas,
                 f"Screen: {self.profile.screen_width}x{self.profile.screen_height}",
@@ -443,11 +534,12 @@ class DiagnosticDashboard:
         self._draw_practice(canvas)
         self._put(
             canvas,
-            "Esc or Q: close diagnostics   No OS actions are executed",
+            "G: toggle full gaze marker   Esc or Q: close   No OS actions are executed",
             (24, 888),
             (145, 145, 145),
             0.48,
         )
+        self._draw_full_gaze_overlay(canvas)
         return canvas
 
 
@@ -470,8 +562,10 @@ def run_diagnostics(
     dashboard = DiagnosticDashboard(config, profile)
     window = "GazeMotion diagnostics"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
+    screen_size: tuple[int, int] | None = None
     try:
         screen_width, screen_height = get_screen_size()
+        screen_size = (screen_width, screen_height)
         window_scale = min(
             (screen_width - 40) / dashboard.WIDTH,
             (screen_height - 80) / dashboard.HEIGHT,
@@ -494,10 +588,13 @@ def run_diagnostics(
     last_frame = monotonic()
     fps = 0.0
     try:
-        with camera, MediaPipeTracker(
-            max_hands=2 if ide_mode else 1,
-            settings=config.tracking,
-        ) as tracker:
+        with (
+            camera,
+            MediaPipeTracker(
+                max_hands=2 if ide_mode else 1,
+                settings=config.tracking,
+            ) as tracker,
+        ):
             while True:
                 now = monotonic()
                 frame = camera.read()
@@ -511,7 +608,19 @@ def run_diagnostics(
                 if not window_is_open(cv2, window):
                     break
                 cv2.imshow(window, canvas)
+                if screen_size is not None and hasattr(cv2, "getWindowImageRect"):
+                    try:
+                        window_rect = tuple(int(value) for value in cv2.getWindowImageRect(window))
+                        if len(window_rect) == 4:
+                            dashboard.set_gaze_overlay_geometry(screen_size, window_rect)
+                    except Exception:
+                        dashboard.set_gaze_overlay_geometry(screen_size, None)
                 key = cv2.waitKey(1) & 0xFF
+                if key in (ord("g"), ord("G")):
+                    enabled = dashboard.toggle_gaze_overlay()
+                    print(
+                        "Full-dashboard gaze marker enabled" if enabled else "Mini gaze map enabled"
+                    )
                 if key in (27, ord("q"), ord("Q")) or not window_is_open(cv2, window):
                     break
     finally:

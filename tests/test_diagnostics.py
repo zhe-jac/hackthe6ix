@@ -77,6 +77,8 @@ def test_dashboard_estimates_gaze_when_profile_is_loaded() -> None:
     profile = CalibrationProfile(
         weights_x=[0.0] * 9 + [0.25],
         weights_y=[0.0] * 9 + [0.75],
+        feature_means=[0.0] * 9,
+        feature_scales=[1.0] * 9,
         feature_count=9,
         screen_width=1920,
         screen_height=1080,
@@ -91,3 +93,10 @@ def test_dashboard_estimates_gaze_when_profile_is_loaded() -> None:
     assert dashboard.last_gaze is not None
     assert dashboard.last_gaze.point.x == 0.25
     assert dashboard.last_gaze.point.y == 0.75
+    assert dashboard.full_gaze_overlay is True
+    assert dashboard._gaze_canvas_point() == (440, 675)
+
+    dashboard.set_gaze_overlay_geometry((1920, 1080), (100, 50, 1760, 900))
+
+    assert dashboard._gaze_canvas_point() == (380, 760)
+    assert dashboard.toggle_gaze_overlay() is False

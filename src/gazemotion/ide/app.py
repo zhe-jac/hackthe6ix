@@ -86,10 +86,11 @@ class GazeMotionIdeApplication:
             mirror=self.config.mirror_camera,
         )
         smoother = AdaptiveGazeSmoother(
-            self.config.gaze.smoothing_slow,
-            self.config.gaze.smoothing_fast,
-            self.config.gaze.fast_speed_threshold,
-            self.config.gaze.stable_speed_threshold,
+            min_cutoff=self.config.gaze.smoothing_min_cutoff,
+            beta=self.config.gaze.smoothing_beta,
+            derivative_cutoff=self.config.gaze.smoothing_derivative_cutoff,
+            deadzone=self.config.gaze.smoothing_deadzone,
+            stable_speed_threshold=self.config.gaze.stable_speed_threshold,
         )
         gaze = GazeEstimator(self.profile, smoother)
         gestures = HandGestureRouter(self.config.gestures, self.config.ide)

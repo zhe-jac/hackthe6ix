@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gazemotion.local/protocol/ide-v1.schema.json",
+  "title": "GazeMotion IDE Protocol v1 Notification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jsonrpc", "method", "params"],
+  "properties": {
+    "jsonrpc": { "const": "2.0" },
+    "method": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "params": { "type": "object" }
+  }
+}

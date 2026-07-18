@@ -136,7 +136,7 @@ class GazeMotionApplication:
         finally:
             controller.shutdown()
             if self.dictation is not None and hasattr(self.dictation, "close"):
-                self.dictation.close()  # type: ignore[attr-defined]
+                self.dictation.close()
             if self.preview:
                 close_window(cv2, "GazeMotion preview")
             self._running = False

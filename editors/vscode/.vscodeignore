@@ -1,0 +1,11 @@
+src/**
+test/**
+tsconfig.json
+eslint.config.mjs
+**/*.map
+dist/test/**
+node_modules/@types/**
+node_modules/typescript/**
+node_modules/eslint/**
+node_modules/typescript-eslint/**
+node_modules/prettier/**

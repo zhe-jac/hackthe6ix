@@ -338,3 +338,25 @@ Other important considerations:
 - Test fatigue early—large repeated arm motions can quickly become uncomfortable.
 - Treat privacy indicators as a core feature because the camera and microphone may remain active for long periods.
 - Start with web browsing as the primary demo environment; it offers a clear, recognizable end-to-end experience without requiring complete operating-system control.
+
+## 19. Developer-tool extension
+
+GazeMotion should also provide a semantic IDE mode optimized for reviewing and directing coding
+agents without a mouse or keyboard. The initial implementation targets VS Code and preserves the
+general desktop controller as a separate mode.
+
+The default bimanual model is:
+
+- Gaze identifies the approximate editor target.
+- The left or navigator hand moves between captured files and change ranges.
+- The right or editor hand scrolls the active editor and confirms semantic selection.
+- Voice supplies the natural-language edit request.
+- A distinct confirmation gesture submits the request; an open palm cancels it.
+
+IDE actions should operate on document symbols, ranges, files, and captured review entries rather
+than raw screen coordinates whenever the editor exposes that information. Agent requests must show
+their transcript and selected context before submission. Changes recorded after submission should
+form an isolated review stack so unrelated existing work is not silently attributed to the agent.
+
+The IDE bridge must remain local, versioned, bounded, reconnectable, and optional. Failure or absence
+of the extension must not change the behavior of desktop mode.

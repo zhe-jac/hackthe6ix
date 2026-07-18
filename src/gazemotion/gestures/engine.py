@@ -38,6 +38,7 @@ class GestureEngine:
         self._thumbs_since: float | None = None
         self._thumbs_latched = False
         self._last_discrete = -1e9
+        self._missing_since: float | None = None
 
     @staticmethod
     def _palm_center(hand: HandObservation) -> Point:
@@ -59,7 +60,10 @@ class GestureEngine:
     @staticmethod
     def _is_thumbs_up(hand: HandObservation) -> bool:
         points = hand.landmarks
-        thumb_vertical = points[4].y < points[3].y - 0.025 and points[3].y < points[2].y
+        palm_width = max(_distance(points[5], points[17]), 1e-4)
+        thumb_vertical = (
+            points[4].y < points[3].y - 0.2 * palm_width and points[3].y < points[2].y
+        )
         curled = sum(
             points[tip].y > points[pip].y for tip, pip in ((8, 6), (12, 10), (16, 14), (20, 18))
         )
@@ -84,6 +88,28 @@ class GestureEngine:
 
     def _discrete_allowed(self, timestamp: float) -> bool:
         return timestamp - self._last_discrete >= self.settings.event_cooldown_seconds
+
+    def hold_progress(self, timestamp: float) -> dict[str, float]:
+        """Return 0..1 progress for holds displayed by diagnostics."""
+        progress = {"thumbs_up": 0.0, "pause": 0.0, "drag": 0.0}
+        if self._thumbs_since is not None and not self._thumbs_latched:
+            duration = max(self.settings.thumbs_hold_seconds, 1e-6)
+            progress["thumbs_up"] = min((timestamp - self._thumbs_since) / duration, 1.0)
+        if self._still_since is not None and not self._open_latched:
+            duration = max(self.settings.open_hold_seconds, 1e-6)
+            progress["pause"] = min((timestamp - self._still_since) / duration, 1.0)
+        if self._pinching and not self._dragging:
+            duration = max(self.settings.drag_hold_seconds, 1e-6)
+            effective_timestamp = (
+                self._missing_since if self._missing_since is not None else timestamp
+            )
+            progress["drag"] = min((effective_timestamp - self._pinch_started) / duration, 1.0)
+        return progress
+
+    @property
+    def hand_missing(self) -> bool:
+        """Whether a pinch or drag is currently inside its tracking grace window."""
+        return self._missing_since is not None
 
     @property
     def current_mode(self) -> str:
@@ -117,8 +143,26 @@ class GestureEngine:
             events.append(GestureEvent(GestureType.PINCH_CANCEL, timestamp, confidence=0.5))
         self._pinching = False
         self._dragging = False
+        self._missing_since = None
         self._reset_non_pinch_holds()
         return events
+
+    def _handle_missing_frame(self, timestamp: float) -> list[GestureEvent]:
+        """Reset timed holds immediately and briefly preserve pinches or drags."""
+        self._reset_non_pinch_holds()
+        if not self._pinching:
+            self._missing_since = None
+            return []
+        if self._missing_since is None:
+            self._missing_since = timestamp
+        grace = (
+            self.settings.drag_lost_grace_seconds
+            if self._dragging
+            else self.settings.pinch_lost_grace_seconds
+        )
+        if timestamp - self._missing_since < max(grace, 0.0):
+            return []
+        return self._handle_missing(timestamp)
 
     def update(
         self,
@@ -126,13 +170,33 @@ class GestureEngine:
         timestamp: float,
     ) -> list[GestureEvent]:
         if hand is None:
-            return self._handle_missing(timestamp)
+            return self._handle_missing_frame(timestamp)
 
         events: list[GestureEvent] = []
         metrics = self.measure(hand)
         assert metrics is not None
         palm = metrics.palm_center
         pinch_ratio = metrics.pinch_ratio
+
+        if self._missing_since is not None:
+            missing_duration = max(timestamp - self._missing_since, 0.0)
+            grace = (
+                self.settings.drag_lost_grace_seconds
+                if self._dragging
+                else self.settings.pinch_lost_grace_seconds
+            )
+            self._missing_since = None
+            if missing_duration >= max(grace, 0.0):
+                events.extend(self._handle_missing(timestamp))
+            elif self._dragging:
+                # Re-anchor instead of turning the reacquisition jump into drag motion.
+                self._last_palm = palm
+            elif self._pinching and pinch_ratio >= self.settings.pinch_off:
+                # A release that happened while invisible is ambiguous, so never click it.
+                events.extend(self._handle_missing(timestamp))
+            elif self._pinching:
+                # Missing time must not turn a click into a drag hold.
+                self._pinch_started += missing_duration
 
         if not self._pinching and pinch_ratio <= self.settings.pinch_on:
             self._pinching = True

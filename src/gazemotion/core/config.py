@@ -16,7 +16,9 @@ def default_config_dir() -> Path:
 class GestureSettings:
     pinch_on: float = 0.32
     pinch_off: float = 0.46
-    pinch_min_seconds: float = 0.10
+    pinch_min_seconds: float = 0.05
+    pinch_lost_grace_seconds: float = 0.10
+    drag_lost_grace_seconds: float = 0.30
     drag_hold_seconds: float = 0.55
     drag_scale: float = 2.0
     scroll_arm_seconds: float = 0.30
@@ -63,6 +65,20 @@ class TrackingSettings:
 
 
 @dataclass(slots=True)
+class IdeSettings:
+    editor: str = "vscode"
+    host: str = "127.0.0.1"
+    port: int = 8765
+    session_token: str = ""
+    navigator_hand: str = "left"
+    editor_hand: str = "right"
+    navigation_cooldown_seconds: float = 0.35
+    selection_timeout_seconds: float = 0.60
+    reconnect_delay_seconds: float = 1.0
+    max_message_bytes: int = 262_144
+
+
+@dataclass(slots=True)
 class AppConfig:
     camera_index: int = 0
     camera_width: int = 1280
@@ -74,6 +90,7 @@ class AppConfig:
     gestures: GestureSettings = field(default_factory=GestureSettings)
     tracking: TrackingSettings = field(default_factory=TrackingSettings)
     voice: VoiceSettings = field(default_factory=VoiceSettings)
+    ide: IdeSettings = field(default_factory=IdeSettings)
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -92,6 +109,7 @@ class AppConfig:
             gestures=GestureSettings(**data.get("gestures", {})),
             tracking=TrackingSettings(**data.get("tracking", {})),
             voice=VoiceSettings(**data.get("voice", {})),
+            ide=IdeSettings(**data.get("ide", {})),
         )
 
     def save(self, path: Path | None = None) -> Path:
@@ -117,4 +135,5 @@ class AppConfig:
             gestures=GestureSettings(**data["gestures"]),
             tracking=TrackingSettings(**data["tracking"]),
             voice=VoiceSettings(**data["voice"]),
+            ide=IdeSettings(**data["ide"]),
         )

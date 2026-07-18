@@ -17,7 +17,9 @@
   "gestures": {
     "pinch_on": 0.32,
     "pinch_off": 0.46,
-    "pinch_min_seconds": 0.1,
+    "pinch_min_seconds": 0.05,
+    "pinch_lost_grace_seconds": 0.1,
+    "drag_lost_grace_seconds": 0.3,
     "drag_hold_seconds": 0.55,
     "drag_scale": 2.0,
     "scroll_arm_seconds": 0.3,
@@ -46,5 +48,17 @@
     "sample_rate": 16000,
     "device": "cpu",
     "compute_type": "int8"
+  },
+  "ide": {
+    "editor": "vscode",
+    "host": "127.0.0.1",
+    "port": 8765,
+    "session_token": "",
+    "navigator_hand": "left",
+    "editor_hand": "right",
+    "navigation_cooldown_seconds": 0.35,
+    "selection_timeout_seconds": 0.6,
+    "reconnect_delay_seconds": 1.0,
+    "max_message_bytes": 262144
   }
 }

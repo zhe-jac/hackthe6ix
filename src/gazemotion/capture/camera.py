@@ -34,7 +34,10 @@ class OpenCVCamera:
         else:
             capture = cv2.VideoCapture(self.index)
         if len(self.fourcc) == 4:
-            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
+            capture.set(
+                cv2.CAP_PROP_FOURCC,
+                cv2.VideoWriter_fourcc(*self.fourcc),  # type: ignore[attr-defined]
+            )
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         capture.set(cv2.CAP_PROP_FPS, self.fps)

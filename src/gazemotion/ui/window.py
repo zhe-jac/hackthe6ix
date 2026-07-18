@@ -6,7 +6,7 @@ from typing import Any
 def window_is_open(cv2: Any, name: str) -> bool:
     """Return false when a user closes an OpenCV window with its window controls."""
     try:
-        return cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) >= 1
+        return bool(cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) >= 1)
     except cv2.error:
         return False
 

@@ -19,6 +19,17 @@ class PerceptionResult:
     face_landmarks: tuple[Point, ...] | None = None
     hand_candidate: HandObservation | None = None
     hand_confirmation_progress: int = 0
+    hands: tuple[HandObservation, ...] = ()
+    hand_candidates: tuple[HandObservation, ...] = ()
+    hand_confirmation_progresses: tuple[int, ...] = ()
+
+
+@dataclass(slots=True)
+class _HandTrackState:
+    track_id: int
+    hand: HandObservation
+    confirmation_frames: int = 1
+    confirmed: bool = False
 
 
 class MediaPipeTracker:
@@ -65,6 +76,7 @@ class MediaPipeTracker:
             raise RuntimeError("MediaPipe is not installed; run `uv sync`") from exc
 
         self._mp = mp
+        self._max_hands = max(max_hands, 1)
         self.settings = settings or TrackingSettings()
         face_model = ensure_model("face_landmarker.task")
         hand_model = ensure_model("hand_landmarker.task")
@@ -95,6 +107,8 @@ class MediaPipeTracker:
         self._hand_candidate: HandObservation | None = None
         self._hand_candidate_frames = 0
         self._hand_confirmed = False
+        self._hand_tracks: dict[int, _HandTrackState] = {}
+        self._next_hand_track_id = 1
 
     @staticmethod
     def _points(landmarks: Iterable[Any]) -> tuple[Point, ...]:
@@ -143,6 +157,83 @@ class MediaPipeTracker:
         if self._hand_candidate_frames >= required:
             self._hand_confirmed = True
         return hand if self._hand_confirmed else None
+
+    @staticmethod
+    def _with_handedness(hand: HandObservation, handedness: str) -> HandObservation:
+        if hand.handedness == handedness:
+            return hand
+        return HandObservation(
+            hand.landmarks,
+            handedness,
+            hand.confidence,
+            hand.timestamp,
+        )
+
+    def _stabilize_hands(
+        self,
+        hands: tuple[HandObservation, ...],
+    ) -> tuple[
+        tuple[HandObservation, ...],
+        tuple[HandObservation, ...],
+        tuple[int, ...],
+    ]:
+        """Match detections to short-lived tracks and confirm each hand independently."""
+        if not hands:
+            self._hand_tracks.clear()
+            return (), (), ()
+
+        pairings: list[tuple[float, int, int]] = []
+        for detection_index, hand in enumerate(hands):
+            center = self._hand_center(hand)
+            for track_id, track in self._hand_tracks.items():
+                previous_center = self._hand_center(track.hand)
+                jump = hypot(center.x - previous_center.x, center.y - previous_center.y)
+                if jump > self.settings.hand_candidate_max_jump:
+                    continue
+                handedness_penalty = 0.05 if hand.handedness != track.hand.handedness else 0.0
+                pairings.append((jump + handedness_penalty, detection_index, track_id))
+
+        matched_detections: dict[int, int] = {}
+        matched_tracks: set[int] = set()
+        for _cost, detection_index, track_id in sorted(pairings):
+            if detection_index in matched_detections or track_id in matched_tracks:
+                continue
+            matched_detections[detection_index] = track_id
+            matched_tracks.add(track_id)
+
+        current_tracks: dict[int, _HandTrackState] = {}
+        for detection_index, detected_hand in enumerate(hands):
+            matched_track_id = matched_detections.get(detection_index)
+            if matched_track_id is None:
+                track_id = self._next_hand_track_id
+                self._next_hand_track_id += 1
+                track = _HandTrackState(track_id, detected_hand)
+            else:
+                track_id = matched_track_id
+                previous_track = self._hand_tracks[track_id]
+                stable_label = previous_track.hand.handedness
+                stable_hand = self._with_handedness(detected_hand, stable_label)
+                track = _HandTrackState(
+                    track_id,
+                    stable_hand,
+                    previous_track.confirmation_frames + 1,
+                    previous_track.confirmed,
+                )
+
+            required = max(self.settings.hand_confirmation_frames, 1)
+            if track.confirmation_frames >= required:
+                track.confirmed = True
+            current_tracks[track_id] = track
+
+        self._hand_tracks = current_tracks
+        ordered = sorted(
+            current_tracks.values(),
+            key=lambda track: (track.hand.handedness, track.track_id),
+        )
+        confirmed = tuple(track.hand for track in ordered if track.confirmed)
+        candidates = tuple(track.hand for track in ordered)
+        progress = tuple(track.confirmation_frames for track in ordered)
+        return confirmed, candidates, progress
 
     @classmethod
     def extract_gaze_features(cls, points: tuple[Point, ...]) -> GazeFeatures | None:
@@ -207,25 +298,40 @@ class MediaPipeTracker:
             gaze_features = self.extract_gaze_features(face_points)
             gaze_confidence = 0.9 if gaze_features is not None else 0.0
 
-        raw_hand: HandObservation | None = None
-        if hand_result.hand_landmarks:
-            points = self._points(hand_result.hand_landmarks[0])
+        raw_hands: list[HandObservation] = []
+        handedness_results = hand_result.handedness or []
+        for index, landmarks in enumerate(hand_result.hand_landmarks or ()):
+            points = self._points(landmarks)
             handedness = "unknown"
             confidence = 0.75
-            if hand_result.handedness:
-                category = hand_result.handedness[0][0]
+            if index < len(handedness_results) and handedness_results[index]:
+                category = handedness_results[index][0]
                 handedness = (category.category_name or "unknown").lower()
                 confidence = float(category.score or confidence)
-            raw_hand = HandObservation(points, handedness, confidence, timestamp)
+            raw_hands.append(HandObservation(points, handedness, confidence, timestamp))
 
-        hand = self._stabilize_hand(raw_hand)
+        raw_hand = raw_hands[0] if raw_hands else None
+        hands: tuple[HandObservation, ...]
+        candidates: tuple[HandObservation, ...]
+        progresses: tuple[int, ...]
+        if self._max_hands == 1:
+            hand = self._stabilize_hand(raw_hand)
+            hands = (hand,) if hand is not None else ()
+            candidates = (raw_hand,) if raw_hand is not None else ()
+            progresses = (self._hand_candidate_frames,) if raw_hand is not None else ()
+        else:
+            hands, candidates, progresses = self._stabilize_hands(tuple(raw_hands))
+            hand = hands[0] if hands else None
         return PerceptionResult(
             gaze_features,
             gaze_confidence,
             hand,
             face_points,
             raw_hand,
-            self._hand_candidate_frames,
+            progresses[0] if progresses else 0,
+            hands,
+            candidates,
+            progresses,
         )
 
     def draw_debug(self, frame: Any, result: PerceptionResult) -> Any:
@@ -254,9 +360,15 @@ class MediaPipeTracker:
                     (0, 255, 0),
                     -1,
                 )
-        visual_hand = result.hand or result.hand_candidate
-        if visual_hand:
-            confirmed = result.hand is not None
+        fallback_hand = result.hand or result.hand_candidate
+        visual_hands: tuple[HandObservation, ...] = result.hand_candidates
+        if not visual_hands and fallback_hand is not None:
+            visual_hands = (fallback_hand,)
+        confirmed_ids = {id(hand) for hand in result.hands}
+        if not confirmed_ids and result.hand is not None:
+            confirmed_ids.add(id(result.hand))
+        for visual_hand in visual_hands:
+            confirmed = id(visual_hand) in confirmed_ids
             color = (255, 180, 0) if confirmed else (110, 110, 110)
             thickness = 2 if confirmed else 1
             for start, end in self.HAND_CONNECTIONS:
@@ -278,6 +390,17 @@ class MediaPipeTracker:
                     color,
                     -1,
                 )
+            center = self._hand_center(visual_hand)
+            cv2.putText(
+                frame,
+                visual_hand.handedness.upper(),
+                (int(center.x * width), int(center.y * height)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
         return frame
 
     def close(self) -> None:

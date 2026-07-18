@@ -146,8 +146,140 @@ def test_thumbs_up_toggles_dictation_once() -> None:
     assert engine.update(_hand("thumbs", 0.8), 0.8) == []
 
 
-def test_lost_hand_cancels_active_pinch() -> None:
-    engine = GestureEngine()
+def test_lost_hand_cancels_active_pinch_after_short_grace() -> None:
+    engine = GestureEngine(GestureSettings(pinch_lost_grace_seconds=0.1))
     engine.update(_hand("pinch", 0.0), 0.0)
 
-    assert _types(engine.update(None, 0.1)) == [GestureType.PINCH_CANCEL]
+    assert engine.update(None, 0.05) == []
+    assert _types(engine.update(None, 0.16)) == [GestureType.PINCH_CANCEL]
+
+
+def test_pinch_released_while_missing_is_cancelled_not_clicked() -> None:
+    engine = GestureEngine(
+        GestureSettings(pinch_min_seconds=0.05, pinch_lost_grace_seconds=0.1)
+    )
+    engine.update(_hand("pinch", 0.0), 0.0)
+
+    assert engine.update(None, 0.04) == []
+    assert _types(engine.update(_hand("neutral", 0.08), 0.08)) == [
+        GestureType.PINCH_CANCEL
+    ]
+
+
+def test_reacquired_pinch_can_still_click() -> None:
+    engine = GestureEngine(
+        GestureSettings(pinch_min_seconds=0.05, pinch_lost_grace_seconds=0.1)
+    )
+    engine.update(_hand("pinch", 0.0), 0.0)
+
+    assert engine.update(None, 0.03) == []
+    assert engine.update(_hand("pinch", 0.06), 0.06) == []
+    assert _types(engine.update(_hand("neutral", 0.10), 0.10)) == [GestureType.CLICK]
+
+
+def test_missing_time_does_not_turn_pinch_into_drag() -> None:
+    engine = GestureEngine(
+        GestureSettings(drag_hold_seconds=0.5, pinch_lost_grace_seconds=0.3)
+    )
+    engine.update(_hand("pinch", 0.0), 0.0)
+    engine.update(_hand("pinch", 0.15), 0.15)
+    engine.update(None, 0.20)
+    engine.update(None, 0.35)
+
+    assert engine.update(_hand("pinch", 0.40), 0.40) == []
+    assert engine.update(_hand("pinch", 0.65), 0.65) == []
+    assert _types(engine.update(_hand("pinch", 0.71), 0.71)) == [GestureType.DRAG_START]
+
+
+def test_drag_survives_brief_tracking_dropout_without_jump() -> None:
+    engine = GestureEngine(
+        GestureSettings(drag_hold_seconds=0.5, drag_lost_grace_seconds=0.3)
+    )
+    engine.update(_hand("pinch", 0.0), 0.0)
+    assert _types(engine.update(_hand("pinch", 0.6), 0.6)) == [GestureType.DRAG_START]
+
+    assert engine.update(None, 0.65) == []
+    assert engine.update(None, 0.80) == []
+    assert engine.update(_hand("pinch", 0.85, 0.03), 0.85) == []
+    assert _types(engine.update(_hand("pinch", 0.90, 0.05), 0.90)) == [
+        GestureType.DRAG_MOVE
+    ]
+    assert _types(engine.update(_hand("neutral", 0.95, 0.05), 0.95)) == [
+        GestureType.DRAG_END
+    ]
+
+
+def test_lost_drag_ends_after_grace() -> None:
+    engine = GestureEngine(
+        GestureSettings(drag_hold_seconds=0.5, drag_lost_grace_seconds=0.3)
+    )
+    engine.update(_hand("pinch", 0.0), 0.0)
+    engine.update(_hand("pinch", 0.6), 0.6)
+
+    assert engine.update(None, 0.65) == []
+    assert _types(engine.update(None, 1.0)) == [GestureType.DRAG_END]
+
+
+def test_missing_hand_resets_thumbs_up_hold() -> None:
+    engine = GestureEngine(
+        GestureSettings(thumbs_hold_seconds=0.5, event_cooldown_seconds=0.1)
+    )
+    engine.update(_hand("thumbs", 0.0), 0.0)
+    engine.update(_hand("thumbs", 0.3), 0.3)
+
+    assert engine.update(None, 0.35) == []
+    assert engine.update(_hand("thumbs", 0.60), 0.60) == []
+    assert engine.update(_hand("thumbs", 0.85), 0.85) == []
+    assert _types(engine.update(_hand("thumbs", 1.11), 1.11)) == [
+        GestureType.DICTATION_TOGGLE
+    ]
+
+
+def test_missing_hand_resets_open_palm_hold() -> None:
+    engine = GestureEngine(
+        GestureSettings(open_hold_seconds=0.5, event_cooldown_seconds=0.1)
+    )
+    engine.update(_hand("open", 0.0), 0.0)
+    engine.update(_hand("open", 0.3), 0.3)
+
+    assert engine.update(None, 0.35) == []
+    assert engine.update(_hand("open", 0.60), 0.60) == []
+    assert engine.update(_hand("open", 0.85), 0.85) == []
+    assert _types(engine.update(_hand("open", 1.11), 1.11)) == [
+        GestureType.PAUSE_TOGGLE
+    ]
+
+
+def test_drag_hold_progress_freezes_while_hand_is_missing() -> None:
+    engine = GestureEngine(GestureSettings(pinch_lost_grace_seconds=0.5))
+    engine.update(_hand("pinch", 0.0), 0.0)
+    engine.update(None, 0.25)
+
+    progress_at_loss = engine.hold_progress(0.25)["drag"]
+    assert engine.hold_progress(0.45)["drag"] == progress_at_loss
+
+
+def test_missing_hand_with_no_active_gesture_is_silent() -> None:
+    engine = GestureEngine()
+    assert engine.update(None, 0.0) == []
+    assert engine.update(None, 5.0) == []
+
+
+def _scaled_hand(kind: str, timestamp: float, scale: float) -> HandObservation:
+    original = _hand(kind, timestamp)
+    center = Point(0.5, 0.7)
+    points = tuple(
+        Point(center.x + (point.x - center.x) * scale, center.y + (point.y - center.y) * scale)
+        for point in original.landmarks
+    )
+    return HandObservation(points, original.handedness, original.confidence, timestamp)
+
+
+def test_thumbs_up_detected_for_small_far_away_hand() -> None:
+    engine = GestureEngine(
+        GestureSettings(thumbs_hold_seconds=0.5, event_cooldown_seconds=0.1)
+    )
+
+    engine.update(_scaled_hand("thumbs", 0.0, scale=0.1), 0.0)
+    events = engine.update(_scaled_hand("thumbs", 0.6, scale=0.1), 0.6)
+    assert _types(events) == [GestureType.DICTATION_TOGGLE]

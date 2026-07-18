@@ -39,6 +39,13 @@ class HandObservation:
             raise ValueError("HandObservation requires exactly 21 landmarks")
 
 
+class HandRole(str, Enum):
+    """Stable interaction responsibility assigned to a physical hand."""
+
+    NAVIGATOR = "navigator"
+    EDITOR = "editor"
+
+
 class GestureType(str, Enum):
     PINCH_START = "pinch_start"
     PINCH_CANCEL = "pinch_cancel"
@@ -57,6 +64,14 @@ class GestureEvent:
     timestamp: float
     confidence: float = 1.0
     delta: Point = Point(0.0, 0.0)
+
+
+@dataclass(frozen=True, slots=True)
+class RoleGestureEvent:
+    """A recognized gesture tagged with its configured IDE hand role."""
+
+    role: HandRole
+    gesture: GestureEvent
 
 
 class ControllerState(str, Enum):

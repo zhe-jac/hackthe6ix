@@ -1,0 +1,50 @@
+{
+  "camera_index": 0,
+  "camera_width": 1280,
+  "camera_height": 720,
+  "camera_fps": 30,
+  "camera_fourcc": "MJPG",
+  "mirror_camera": true,
+  "gaze": {
+    "smoothing_slow": 0.2,
+    "smoothing_fast": 0.62,
+    "fast_speed_threshold": 0.06,
+    "stable_speed_threshold": 0.018,
+    "minimum_confidence": 0.55,
+    "max_sample_age_seconds": 0.3,
+    "ridge_alpha": 0.02
+  },
+  "gestures": {
+    "pinch_on": 0.32,
+    "pinch_off": 0.46,
+    "pinch_min_seconds": 0.1,
+    "drag_hold_seconds": 0.55,
+    "drag_scale": 2.0,
+    "scroll_arm_seconds": 0.3,
+    "scroll_deadzone": 0.012,
+    "scroll_activation_distance": 0.035,
+    "scroll_event_interval_seconds": 0.16,
+    "scroll_scale": 55.0,
+    "open_hold_seconds": 1.25,
+    "open_stillness": 0.018,
+    "thumbs_hold_seconds": 0.65,
+    "event_cooldown_seconds": 0.45
+  },
+  "tracking": {
+    "face_detection_confidence": 0.5,
+    "face_presence_confidence": 0.5,
+    "face_tracking_confidence": 0.5,
+    "hand_detection_confidence": 0.72,
+    "hand_presence_confidence": 0.72,
+    "hand_tracking_confidence": 0.65,
+    "hand_confirmation_frames": 3,
+    "hand_candidate_max_jump": 0.25
+  },
+  "voice": {
+    "enabled": true,
+    "model": "tiny.en",
+    "sample_rate": 16000,
+    "device": "cpu",
+    "compute_type": "int8"
+  }
+}

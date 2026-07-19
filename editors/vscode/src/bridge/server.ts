@@ -24,6 +24,11 @@ export type NotificationHandler = (
 ) => Promise<void> | void;
 
 export type BridgeStateHandler = (connected: boolean, detail: string) => void;
+export type BridgeTrafficHandler = (
+  direction: "received" | "sent",
+  notification: BridgeNotification,
+  delivered: boolean,
+) => void;
 
 interface ClientState {
   readonly socket: net.Socket;
@@ -39,6 +44,7 @@ export class BridgeServer {
     private readonly options: BridgeServerOptions,
     private readonly handler: NotificationHandler,
     private readonly onState: BridgeStateHandler,
+    private readonly onTraffic?: BridgeTrafficHandler,
   ) {
     if (!LOOPBACK_HOSTS.has(options.host)) {
       throw new Error("Chudvis bridge must listen on a loopback host");
@@ -78,6 +84,10 @@ export class BridgeServer {
     const port = this.addressPort();
     this.onState(false, `Bridge listening on ${this.options.host}:${port}`);
     return port;
+  }
+
+  public get connected(): boolean {
+    return this.client?.authenticated === true && !this.client.socket.destroyed;
   }
 
   public addressPort(): number {
@@ -133,6 +143,7 @@ export class BridgeServer {
       }
       try {
         const message = parseNotification(line, this.options.maxMessageBytes);
+        this.onTraffic?.("received", message, true);
         if (!client.authenticated) {
           this.authenticate(client, message);
         } else {
@@ -191,8 +202,16 @@ export class BridgeServer {
     params: Readonly<Record<string, unknown>> = {},
   ): void {
     const client = this.client;
+    const message: BridgeNotification = {
+      jsonrpc: "2.0",
+      method,
+      params,
+    };
     if (client?.authenticated === true && !client.socket.destroyed) {
+      this.onTraffic?.("sent", message, true);
       client.socket.write(encodeNotification(method, params));
+    } else {
+      this.onTraffic?.("sent", message, false);
     }
   }
 

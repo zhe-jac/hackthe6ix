@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import multiprocessing
 import os
 import queue
 import threading
@@ -81,6 +82,8 @@ class VoiceSessionService(Protocol):
 
     def complete(self, request_id: str, status: str, spoken_summary: str = "") -> bool: ...
 
+    def speak(self, text: str) -> bool: ...
+
     def set_paused(self, paused: bool) -> None: ...
 
     def close(self) -> None: ...
@@ -89,6 +92,220 @@ class VoiceSessionService(Protocol):
 AudioCallback = Callable[[Any, int, Any, Any], None]
 AudioStreamFactory = Callable[[AudioCallback], AudioInputStream]
 SttTransportFactory = Callable[[], RealtimeSttTransport]
+
+
+@dataclass(frozen=True, slots=True)
+class AudioCaptureStatus:
+    """Audio health forwarded from the isolated microphone process."""
+
+    input_overflow: bool = False
+    dropped_chunks: int = 0
+    error: str = ""
+
+
+def _isolated_audio_capture_worker(
+    sample_rate: int,
+    blocksize: int,
+    input_device: str,
+    stop: Any,
+    chunks: Any,
+    started: Any,
+) -> None:
+    """Capture contiguous microphone blocks outside the camera/MediaPipe process."""
+    announced = False
+    try:
+        import numpy as np
+        import sounddevice as sd
+
+        device: str | int | None = input_device or None
+        if isinstance(device, str):
+            try:
+                device = int(device)
+            except ValueError:
+                pass
+        selected = sd.query_devices(device, "input")
+        device_name = str(selected.get("name", device or "default input"))
+        dropped_chunks = 0
+        with sd.InputStream(
+            samplerate=sample_rate,
+            blocksize=blocksize,
+            channels=1,
+            dtype="float32",
+            device=device,
+        ) as microphone:
+            started.send(("ready", device_name))
+            announced = True
+            while not stop.is_set():
+                samples, overflowed = microphone.read(blocksize)
+                payload = (
+                    "audio",
+                    np.asarray(samples, dtype="<f4").reshape(-1).tobytes(),
+                    bool(overflowed),
+                    dropped_chunks,
+                )
+                try:
+                    chunks.put(payload, timeout=0.05)
+                except queue.Full:
+                    # Preserve the already-buffered contiguous audio. The next delivered
+                    # block carries the cumulative loss count to the parent diagnostics.
+                    dropped_chunks += 1
+    except Exception as exc:
+        detail = str(exc)[:500] or type(exc).__name__
+        if not announced:
+            try:
+                started.send(("error", detail))
+            except (BrokenPipeError, EOFError, OSError):
+                pass
+        else:
+            try:
+                chunks.put(("error", detail), timeout=0.1)
+            except queue.Full:
+                pass
+    finally:
+        try:
+            started.close()
+        except OSError:
+            pass
+
+
+class IsolatedAudioInputStream:
+    """Sounddevice-compatible stream whose capture loop lives in a child process."""
+
+    def __init__(
+        self,
+        callback: AudioCallback,
+        sample_rate: int,
+        blocksize: int,
+        input_device: str,
+        queue_chunks: int,
+    ) -> None:
+        self._callback = callback
+        self._sample_rate = sample_rate
+        self._blocksize = blocksize
+        self._input_device = input_device
+        self._queue_chunks = queue_chunks
+        self._stop: Any | None = None
+        self._chunks: Any | None = None
+        self._process: Any | None = None
+        self._bridge: threading.Thread | None = None
+        self.device_name = ""
+
+    def start(self) -> IsolatedAudioInputStream:
+        if self._process is not None:
+            return self
+        context = multiprocessing.get_context("spawn")
+        stop = context.Event()
+        chunks = context.Queue(maxsize=self._queue_chunks)
+        ready_receiver, ready_sender = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_isolated_audio_capture_worker,
+            args=(
+                self._sample_rate,
+                self._blocksize,
+                self._input_device,
+                stop,
+                chunks,
+                ready_sender,
+            ),
+            name="chudvis-audio-capture",
+            daemon=True,
+        )
+        process.start()
+        ready_sender.close()
+        try:
+            if not ready_receiver.poll(10.0):
+                raise RuntimeError("Microphone capture process did not start within 10 seconds")
+            kind, detail = ready_receiver.recv()
+            if kind != "ready":
+                raise RuntimeError(f"Could not start microphone capture: {detail}")
+            self.device_name = str(detail)
+        except Exception:
+            stop.set()
+            process.join(timeout=1.0)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+            chunks.cancel_join_thread()
+            chunks.close()
+            raise
+        finally:
+            ready_receiver.close()
+
+        self._stop = stop
+        self._chunks = chunks
+        self._process = process
+        self._bridge = threading.Thread(
+            target=self._forward_audio,
+            name="chudvis-audio-bridge",
+            daemon=True,
+        )
+        self._bridge.start()
+        return self
+
+    def _forward_audio(self) -> None:
+        import numpy as np
+
+        stop = self._stop
+        chunks = self._chunks
+        process = self._process
+        if stop is None or chunks is None or process is None:
+            return
+        while not stop.is_set() or process.is_alive():
+            try:
+                payload = chunks.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if not isinstance(payload, tuple) or not payload:
+                continue
+            if payload[0] == "error":
+                detail = str(payload[1]) if len(payload) > 1 else "Microphone capture stopped"
+                self._callback(
+                    np.empty((0, 1), dtype=np.float32),
+                    0,
+                    None,
+                    AudioCaptureStatus(error=detail),
+                )
+                return
+            if payload[0] != "audio" or len(payload) != 4:
+                continue
+            raw, overflowed, dropped_chunks = payload[1:]
+            if not isinstance(raw, bytes):
+                continue
+            samples = np.frombuffer(raw, dtype="<f4").reshape(-1, 1)
+            self._callback(
+                samples,
+                len(samples),
+                None,
+                AudioCaptureStatus(
+                    input_overflow=bool(overflowed),
+                    dropped_chunks=max(int(dropped_chunks), 0),
+                ),
+            )
+
+    def stop(self) -> None:
+        stop = self._stop
+        process = self._process
+        if stop is not None:
+            stop.set()
+        if process is not None:
+            process.join(timeout=2.0)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=1.0)
+        bridge = self._bridge
+        if bridge is not None and bridge is not threading.current_thread():
+            bridge.join(timeout=1.0)
+        self._process = None
+        self._bridge = None
+
+    def close(self) -> None:
+        self.stop()
+        chunks = self._chunks
+        self._chunks = None
+        self._stop = None
+        if chunks is not None:
+            chunks.cancel_join_thread()
+            chunks.close()
 
 
 def float_samples_to_pcm16(samples: Sequence[float] | Any) -> bytes:
@@ -177,8 +394,8 @@ class ElevenLabsRealtimeTransport:
 class ElevenLabsTtsSpeaker:
     """Stream ElevenLabs PCM into an output device without blocking UI/capture threads."""
 
-    def __init__(self, settings: VoiceSettings, api_key: str) -> None:
-        self._voice_id = settings.elevenlabs_tts_voice_id
+    def __init__(self, settings: VoiceSettings, api_key: str, voice_id: str = "") -> None:
+        self._voice_id = voice_id.strip() or settings.elevenlabs_tts_voice_id
         self._model = settings.elevenlabs_tts_model
         self._api_key = api_key
         self._sample_rate = settings.sample_rate
@@ -270,8 +487,12 @@ class VoiceSession:
         self._completed: deque[str] = deque(maxlen=32)
         self._completion_pending: set[str] = set()
         self._lock = threading.Lock()
-        self._tts_warned = False
         self.dropped_audio_chunks = 0
+        self.capture_overflows = 0
+        self.capture_dropped_chunks = 0
+        self.max_audio_queue_depth = 0
+        self._capture_error = ""
+        self._last_reported_audio_loss = 0
 
     @property
     def state(self) -> VoiceState:
@@ -284,27 +505,34 @@ class VoiceSession:
             return self._request_id
 
     def _default_stream_factory(self, callback: AudioCallback) -> AudioInputStream:
-        try:
-            import sounddevice as sd
-        except (ModuleNotFoundError, OSError) as exc:
-            raise RuntimeError("sounddevice is required for Chudvis microphone input") from exc
-        device: str | int | None = self.settings.input_device or None
-        if isinstance(device, str):
-            try:
-                device = int(device)
-            except ValueError:
-                pass
         blocksize = self.settings.sample_rate * self.settings.audio_chunk_ms // 1000
         return cast(
             AudioInputStream,
-            sd.InputStream(
-                samplerate=self.settings.sample_rate,
-                blocksize=blocksize,
-                channels=1,
-                dtype="float32",
-                device=device,
-                callback=callback,
+            IsolatedAudioInputStream(
+                callback,
+                self.settings.sample_rate,
+                blocksize,
+                self.settings.input_device,
+                self.settings.audio_queue_chunks,
             ),
+        )
+
+    def _report_audio_loss(self) -> None:
+        total = self.capture_overflows + self.capture_dropped_chunks + self.dropped_audio_chunks
+        if total <= self._last_reported_audio_loss:
+            return
+        # Report the first loss and then powers of two so a broken device is visible
+        # without flooding the bridge/UI from the real-time callback path.
+        if self._last_reported_audio_loss and total & (total - 1):
+            return
+        self._last_reported_audio_loss = total
+        self._emit(
+            VoiceEvent(
+                VoiceEventType.STATE,
+                request_id=self.request_id,
+                state=self.state,
+                detail=(f"Microphone lost {total} audio chunk(s); wake recognition may miss words"),
+            )
         )
 
     def _audio_callback(
@@ -312,10 +540,24 @@ class VoiceSession:
         samples: Any,
         _frames: int,
         _time_info: Any,
-        _status: Any,
+        status: Any,
     ) -> None:
         if self._stop.is_set():
             return
+        error = getattr(status, "error", "")
+        if error:
+            self._capture_error = str(error)[:500]
+            try:
+                self._audio.put_nowait([])
+            except queue.Full:
+                pass
+            return
+        if bool(getattr(status, "input_overflow", False)):
+            self.capture_overflows += 1
+        capture_drops = max(int(getattr(status, "dropped_chunks", 0)), 0)
+        self.capture_dropped_chunks = max(self.capture_dropped_chunks, capture_drops)
+        if self.capture_overflows or self.capture_dropped_chunks:
+            self._report_audio_loss()
         copied = samples.copy().reshape(-1)
         try:
             self._audio.put_nowait(copied)
@@ -329,6 +571,11 @@ class VoiceSession:
                 self._audio.put_nowait(copied)
             except queue.Full:
                 self.dropped_audio_chunks += 1
+            self._report_audio_loss()
+        try:
+            self.max_audio_queue_depth = max(self.max_audio_queue_depth, self._audio.qsize())
+        except (NotImplementedError, OSError):
+            pass
 
     def start(self) -> None:
         if self._thread is not None:
@@ -417,6 +664,18 @@ class VoiceSession:
             return False
         return True
 
+    def speak(self, text: str) -> bool:
+        summary = text.strip()[:160]
+        with self._lock:
+            active = self._request_id
+        if not summary or self._speaker is None or active is not None:
+            return False
+        try:
+            self._commands.put_nowait(("speak", "", summary))
+        except queue.Full:
+            return False
+        return True
+
     def set_paused(self, paused: bool) -> None:
         if paused:
             self._cancelled.set()
@@ -449,9 +708,7 @@ class VoiceSession:
         kind = self._message_kind(message)
         text = _bounded_text(message.get("text"), self.settings.max_transcript_chars).strip()
         if kind in {"partial_transcript", "partial"} and text:
-            self._emit(
-                VoiceEvent(VoiceEventType.PARTIAL, request_id=self.request_id, text=text)
-            )
+            self._emit(VoiceEvent(VoiceEventType.PARTIAL, request_id=self.request_id, text=text))
             return False
         if kind in {
             "committed_transcript",
@@ -519,6 +776,19 @@ class VoiceSession:
             if self.state == VoiceState.PAUSED:
                 self._rearm()
             return
+        if status == "speak":
+            self._cancelled.clear()
+            self._set_state(VoiceState.SPEAKING)
+            rearm_detail = ""
+            try:
+                if self._speaker is not None:
+                    self._speaker.speak(summary, self._cancelled)
+            except Exception as exc:
+                detail = str(exc).strip()[:420] or type(exc).__name__
+                rearm_detail = f"Spoken summary unavailable: {detail}"
+                self._set_state(VoiceState.ERROR, rearm_detail)
+            self._rearm(rearm_detail)
+            return
         if request_id != self.request_id:
             with self._lock:
                 self._completion_pending.discard(request_id)
@@ -526,18 +796,19 @@ class VoiceSession:
         if status == "cancel":
             self._rearm("Voice request cancelled")
             return
+        rearm_detail = ""
         if summary and self._speaker is not None:
             self._set_state(VoiceState.SPEAKING)
             try:
                 self._speaker.speak(summary, self._cancelled)
-            except Exception:
-                if not self._tts_warned:
-                    self._tts_warned = True
-                    self._set_state(VoiceState.ERROR, "Spoken summary unavailable")
+            except Exception as exc:
+                detail = str(exc).strip()[:420] or type(exc).__name__
+                rearm_detail = f"Spoken summary unavailable: {detail}"
+                self._set_state(VoiceState.ERROR, rearm_detail)
         with self._lock:
             self._completed.append(request_id)
             self._completion_pending.discard(request_id)
-        self._rearm()
+        self._rearm(rearm_detail)
 
     def _clear_audio(self) -> None:
         while True:
@@ -561,8 +832,13 @@ class VoiceSession:
         self._set_state(VoiceState.READY, detail)
 
     def _run(self) -> None:
-        self._set_state(VoiceState.READY)
+        device_name = str(getattr(self._stream, "device_name", "")).strip()
+        detail = f"Listening on {device_name}" if device_name else ""
+        self._set_state(VoiceState.READY, detail)
         while not self._stop.is_set():
+            if self._capture_error:
+                self._set_state(VoiceState.ERROR, self._capture_error)
+                return
             try:
                 command = self._commands.get_nowait()
             except queue.Empty:
@@ -577,6 +853,9 @@ class VoiceSession:
                 samples = self._audio.get(timeout=0.05)
             except queue.Empty:
                 continue
+            if self._capture_error:
+                self._set_state(VoiceState.ERROR, self._capture_error)
+                return
             try:
                 if self.state == VoiceState.READY:
                     if self._wake.accept(samples):
@@ -624,9 +903,7 @@ def create_elevenlabs_voice_session(settings: VoiceSettings) -> VoiceSession:
             f"{settings.elevenlabs_api_key_env} is not configured; using local dictation fallback"
         )
     cache_dir = (
-        Path(settings.wake_word_cache_dir).expanduser()
-        if settings.wake_word_cache_dir
-        else None
+        Path(settings.wake_word_cache_dir).expanduser() if settings.wake_word_cache_dir else None
     )
     wake = SherpaWakeWordDetector(
         settings.wake_word_spellings,
@@ -634,9 +911,18 @@ def create_elevenlabs_voice_session(settings: VoiceSettings) -> VoiceSession:
         settings.wake_word_threshold,
         cache_dir,
     )
+    enabled_override = os.environ.get("CHUDVIS_ELEVENLABS_TTS_ENABLED", "").strip().lower()
+    tts_enabled = settings.elevenlabs_tts_enabled
+    if enabled_override in {"0", "false", "no", "off"}:
+        tts_enabled = False
+    elif enabled_override in {"1", "true", "yes", "on"}:
+        tts_enabled = True
+    voice_id = os.environ.get(
+        "CHUDVIS_ELEVENLABS_VOICE_ID", settings.elevenlabs_tts_voice_id
+    ).strip()
     speaker: TtsSpeaker | None = None
-    if settings.elevenlabs_tts_enabled:
-        speaker = ElevenLabsTtsSpeaker(settings, api_key)
+    if tts_enabled and voice_id:
+        speaker = ElevenLabsTtsSpeaker(settings, api_key, voice_id)
     return VoiceSession(
         settings,
         wake,

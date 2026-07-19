@@ -12,8 +12,11 @@ export type SidebarAction =
   | "toggleControls"
   | "testTracking"
   | "calibrate"
+  | "showDiagnostics"
   | "configureBackboard"
-  | "configureElevenLabs";
+  | "configureElevenLabs"
+  | "configureElevenLabsVoice"
+  | "testElevenLabsVoice";
 
 interface HistoryEntry {
   readonly kind: "request" | "answer" | "edit" | "error";
@@ -24,6 +27,7 @@ interface SidebarState {
   readonly controlsRunning: boolean;
   readonly backboardStatus: string;
   readonly elevenLabsStatus: string;
+  readonly elevenLabsVoiceStatus: string;
   readonly voiceState: VoiceState;
   readonly detail: string;
   readonly partial: string;
@@ -40,6 +44,7 @@ const INITIAL_STATE: SidebarState = {
   controlsRunning: false,
   backboardStatus: "Checking…",
   elevenLabsStatus: "Checking…",
+  elevenLabsVoiceStatus: "Checking…",
   voiceState: "paused",
   detail: "Controls are off. Start them here or use the keyboard shortcut.",
   partial: "",
@@ -83,8 +88,11 @@ export class ChudvisSidebar
           "toggleControls",
           "testTracking",
           "calibrate",
+          "showDiagnostics",
           "configureBackboard",
           "configureElevenLabs",
+          "configureElevenLabsVoice",
+          "testElevenLabsVoice",
         ].includes(String(message.action))
       ) {
         return;
@@ -120,11 +128,13 @@ export class ChudvisSidebar
   public setServiceStatus(
     backboardStatus: string,
     elevenLabsStatus: string,
+    elevenLabsVoiceStatus: string,
   ): void {
     this.state = {
       ...this.state,
       backboardStatus: backboardStatus.slice(0, 200),
       elevenLabsStatus: elevenLabsStatus.slice(0, 200),
+      elevenLabsVoiceStatus: elevenLabsVoiceStatus.slice(0, 200),
     };
     void this.publish();
   }
@@ -292,16 +302,18 @@ export class ChudvisSidebar
   <div class="actions controls" aria-label="Chudvis controls">
     <button id="toggleControls" class="primary">Start Controls</button><button id="testTracking">Test Tracking</button><button id="calibrate">Recalibrate Gaze</button>
   </div>
+  <div class="actions"><button id="showDiagnostics">Open Live Diagnostics</button></div>
   <details open>
     <summary>AI and voice setup</summary>
     <table class="service-table">
       <tbody>
         <tr><th scope="row">Backboard</th><td id="backboardStatus" class="service-status">Checking…</td></tr>
         <tr><th scope="row">ElevenLabs</th><td id="elevenLabsStatus" class="service-status">Checking…</td></tr>
+        <tr><th scope="row">Spoken feedback</th><td id="elevenLabsVoiceStatus" class="service-status">Checking…</td></tr>
       </tbody>
     </table>
     <div class="actions service-actions">
-      <button id="configureBackboard">Set Backboard Key</button><button id="configureElevenLabs">Set ElevenLabs Key</button>
+      <button id="configureBackboard">Set Backboard Key</button><button id="configureElevenLabs">Set ElevenLabs Key</button><button id="configureElevenLabsVoice">Choose Voice</button><button id="testElevenLabsVoice">Test Voice</button>
     </div>
     <p class="service-note">Keys are kept in VS Code secure storage. Workspace .env files are not loaded.</p>
   </details>
@@ -349,7 +361,7 @@ export class ChudvisSidebar
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const ids = ['partial', 'transcript', 'target', 'answer', 'summary'];
-    for (const action of ['openChanges', 'apply', 'cancel', 'undo', 'clearMemory', 'toggleControls', 'testTracking', 'calibrate', 'configureBackboard', 'configureElevenLabs']) {
+    for (const action of ['openChanges', 'apply', 'cancel', 'undo', 'clearMemory', 'toggleControls', 'testTracking', 'calibrate', 'showDiagnostics', 'configureBackboard', 'configureElevenLabs', 'configureElevenLabsVoice', 'testElevenLabsVoice']) {
       document.getElementById(action).addEventListener('click', () => vscode.postMessage({ action }));
     }
     window.addEventListener('message', (event) => {
@@ -362,6 +374,7 @@ export class ChudvisSidebar
       document.getElementById('toggleControls').textContent = state.controlsRunning ? 'Stop Controls' : 'Start Controls';
       document.getElementById('backboardStatus').textContent = state.backboardStatus;
       document.getElementById('elevenLabsStatus').textContent = state.elevenLabsStatus;
+      document.getElementById('elevenLabsVoiceStatus').textContent = state.elevenLabsVoiceStatus;
       for (const id of ids) {
         const value = String(state[id] || '');
         document.getElementById(id).textContent = value;

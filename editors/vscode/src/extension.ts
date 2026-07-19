@@ -9,6 +9,8 @@ import {
   stringParam,
 } from "./bridge/messages";
 import { BridgeServer, type BridgeServerOptions } from "./bridge/server";
+import { DiagnosticLog } from "./diagnostics/diagnosticLog";
+import { DiagnosticPanel } from "./diagnostics/diagnosticPanel";
 import { EditorActions } from "./editor/editorActions";
 import { SemanticSelectionService } from "./editor/semanticSelection";
 import { BackboardProvider } from "./model/backboardProvider";
@@ -25,6 +27,53 @@ import { parseChudvisInbound } from "./voice/protocol";
 let runtime: ExtensionRuntime | undefined;
 const ELEVENLABS_SECRET_KEY = "chudvis.elevenLabsApiKey";
 const ELEVENLABS_ENVIRONMENT_KEY = "ELEVENLABS_API_KEY";
+const DEFAULT_ELEVENLABS_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+
+interface ElevenLabsVoice {
+  readonly id: string;
+  readonly name: string;
+  readonly category: string;
+}
+
+function parseElevenLabsVoices(value: unknown): readonly ElevenLabsVoice[] {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("voices" in value) ||
+    !Array.isArray(value.voices)
+  ) {
+    throw new Error("ElevenLabs returned an invalid voice list");
+  }
+  const voices = new Map<string, ElevenLabsVoice>();
+  for (const raw of value.voices.slice(0, 100)) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      continue;
+    }
+    const candidate = raw as Record<string, unknown>;
+    if (
+      typeof candidate.voice_id !== "string" ||
+      candidate.voice_id.length === 0 ||
+      candidate.voice_id.length > 100 ||
+      typeof candidate.name !== "string" ||
+      candidate.name.length === 0 ||
+      candidate.name.length > 200
+    ) {
+      continue;
+    }
+    voices.set(candidate.voice_id, {
+      id: candidate.voice_id,
+      name: candidate.name,
+      category:
+        typeof candidate.category === "string"
+          ? candidate.category.slice(0, 80)
+          : "voice",
+    });
+  }
+  return [...voices.values()].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+}
 
 function bridgeOptions(): BridgeServerOptions {
   const configuration = vscode.workspace.getConfiguration("chudvis.bridge");
@@ -51,6 +100,8 @@ class ExtensionRuntime implements vscode.Disposable {
   private readonly output = vscode.window.createOutputChannel("Chudvis", {
     log: true,
   });
+  private readonly diagnostics: DiagnosticLog;
+  private readonly diagnosticPanel: DiagnosticPanel;
   private readonly status = new StatusPresenter();
   private readonly selection = new SemanticSelectionService((message) =>
     this.report(message),
@@ -78,7 +129,15 @@ class ExtensionRuntime implements vscode.Disposable {
   private readonly perception: ChudvisRuntimeManager;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
-    this.provider = new BackboardProvider(context, this.output);
+    this.diagnostics = new DiagnosticLog(context);
+    this.diagnosticPanel = new DiagnosticPanel(this.diagnostics, () =>
+      this.followDiagnostics(),
+    );
+    this.provider = new BackboardProvider(
+      context,
+      this.output,
+      this.diagnostics,
+    );
     const holder: { coordinator?: ChudvisCoordinator } = {};
     this.sidebar = new ChudvisSidebar((action) => {
       switch (action) {
@@ -91,11 +150,20 @@ class ExtensionRuntime implements vscode.Disposable {
         case "calibrate":
           void this.startRuntimeMode("calibrate");
           return;
+        case "showDiagnostics":
+          this.diagnosticPanel.show();
+          return;
         case "configureBackboard":
           void this.configureBackboardApiKey();
           return;
         case "configureElevenLabs":
           void this.configureElevenLabsApiKey();
+          return;
+        case "configureElevenLabsVoice":
+          void this.configureElevenLabsVoice();
+          return;
+        case "testElevenLabsVoice":
+          this.testElevenLabsVoice();
           return;
       }
       if (holder.coordinator !== undefined) {
@@ -112,6 +180,7 @@ class ExtensionRuntime implements vscode.Disposable {
       this.output,
       () => this.bridge,
       (message) => this.report(message),
+      this.diagnostics,
     );
     holder.coordinator = coordinator;
     this.chudvis = coordinator;
@@ -124,6 +193,8 @@ class ExtensionRuntime implements vscode.Disposable {
     );
     context.subscriptions.push(
       this.output,
+      this.diagnosticPanel,
+      this.diagnostics,
       this.status,
       this.selection,
       this.review,
@@ -178,6 +249,12 @@ class ExtensionRuntime implements vscode.Disposable {
       vscode.commands.registerCommand("chudvis.clearElevenLabsKey", () =>
         this.clearElevenLabsApiKey(),
       ),
+      vscode.commands.registerCommand("chudvis.configureElevenLabsVoice", () =>
+        this.configureElevenLabsVoice(),
+      ),
+      vscode.commands.registerCommand("chudvis.testElevenLabsVoice", () =>
+        this.testElevenLabsVoice(),
+      ),
       vscode.commands.registerCommand("chudvis.clearEditingMemory", () =>
         this.chudvis.handleAction("clearMemory"),
       ),
@@ -186,6 +263,12 @@ class ExtensionRuntime implements vscode.Disposable {
       ),
       vscode.commands.registerCommand("chudvis.openChanges", () =>
         this.chudvis.handleAction("openChanges"),
+      ),
+      vscode.commands.registerCommand("chudvis.showDiagnostics", () =>
+        this.diagnosticPanel.show(),
+      ),
+      vscode.commands.registerCommand("chudvis.followDiagnostics", () =>
+        this.followDiagnostics(),
       ),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration("chudvis.bridge")) {
@@ -196,6 +279,9 @@ class ExtensionRuntime implements vscode.Disposable {
           this.perception.running
         ) {
           void this.perception.restart();
+        }
+        if (event.affectsConfiguration("chudvis.elevenLabs")) {
+          void this.refreshServiceStatus();
         }
       }),
       this.perception,
@@ -235,6 +321,7 @@ class ExtensionRuntime implements vscode.Disposable {
 
   private report(message: string): void {
     this.output.info(message);
+    this.diagnostics.record("status", "reported", { message });
     this.status.setDetail(message);
     this.bridge?.sendStatus(message);
   }
@@ -254,7 +341,20 @@ class ExtensionRuntime implements vscode.Disposable {
     Readonly<Record<string, string>>
   > {
     const key = await this.savedElevenLabsApiKey();
-    return key === undefined ? {} : { [ELEVENLABS_ENVIRONMENT_KEY]: key };
+    const configuration =
+      vscode.workspace.getConfiguration("chudvis.elevenLabs");
+    const environment: Record<string, string> = {
+      CHUDVIS_ELEVENLABS_TTS_ENABLED: String(
+        configuration.get<boolean>("ttsEnabled", true),
+      ),
+      CHUDVIS_ELEVENLABS_VOICE_ID: configuration
+        .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
+        .trim(),
+    };
+    if (key !== undefined) {
+      environment[ELEVENLABS_ENVIRONMENT_KEY] = key;
+    }
+    return environment;
   }
 
   private async refreshServiceStatus(): Promise<void> {
@@ -269,15 +369,31 @@ class ExtensionRuntime implements vscode.Disposable {
           : this.inheritedElevenLabsApiKey() !== undefined
             ? "Using VS Code host environment"
             : "Not configured";
+      const voiceConfiguration =
+        vscode.workspace.getConfiguration("chudvis.elevenLabs");
+      const ttsEnabled = voiceConfiguration.get<boolean>("ttsEnabled", true);
+      const voiceId = voiceConfiguration
+        .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
+        .trim();
+      const voiceStatus = !ttsEnabled
+        ? "Disabled"
+        : voiceId === DEFAULT_ELEVENLABS_VOICE_ID
+          ? "Rachel (default)"
+          : `Enabled · ${voiceId}`;
       this.sidebar.setServiceStatus(
         backboardConfigured ? "Key saved securely" : "Not configured",
         elevenLabsStatus,
+        voiceStatus,
       );
     } catch (error: unknown) {
       const detail =
         error instanceof Error ? error.message : "secure storage unavailable";
       this.output.warn(`Could not read service credentials: ${detail}`);
-      this.sidebar.setServiceStatus("Status unavailable", "Status unavailable");
+      this.sidebar.setServiceStatus(
+        "Status unavailable",
+        "Status unavailable",
+        "Status unavailable",
+      );
     }
   }
 
@@ -343,6 +459,155 @@ class ExtensionRuntime implements vscode.Disposable {
     );
   }
 
+  private async effectiveElevenLabsApiKey(): Promise<string | undefined> {
+    return (
+      (await this.savedElevenLabsApiKey()) ?? this.inheritedElevenLabsApiKey()
+    );
+  }
+
+  private async configureElevenLabsVoice(): Promise<void> {
+    try {
+      let key = await this.effectiveElevenLabsApiKey();
+      if (key === undefined) {
+        if (!(await this.configureElevenLabsApiKey())) {
+          return;
+        }
+        key = await this.effectiveElevenLabsApiKey();
+      }
+      if (key === undefined) {
+        throw new Error("ElevenLabs API key is not configured");
+      }
+      const response = await fetch(
+        "https://api.elevenlabs.io/v2/voices?page_size=100&sort=name&sort_direction=asc&include_total_count=false",
+        {
+          headers: { "xi-api-key": key },
+          signal: AbortSignal.timeout(15_000),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(
+          `ElevenLabs voice lookup failed with HTTP ${response.status}`,
+        );
+      }
+      const voices = parseElevenLabsVoices(await response.json());
+      const configuration =
+        vscode.workspace.getConfiguration("chudvis.elevenLabs");
+      const currentId = configuration.get<string>(
+        "voiceId",
+        DEFAULT_ELEVENLABS_VOICE_ID,
+      );
+      const choices = [
+        {
+          label: "$(mute) Disable spoken feedback",
+          description:
+            "Keep transcription enabled without playing completion summaries",
+          action: "disable" as const,
+        },
+        {
+          label: "$(edit) Enter a voice ID",
+          description: "Use a voice ID copied from ElevenLabs",
+          action: "manual" as const,
+        },
+        ...voices.map((voice) => ({
+          label: voice.name,
+          description: `${voice.category}${voice.id === currentId ? " · current" : ""}`,
+          detail: voice.id,
+          action: "voice" as const,
+          voice,
+        })),
+      ];
+      const selected = await vscode.window.showQuickPick(choices, {
+        title: "Choose the ElevenLabs voice for Chudvis feedback",
+        placeHolder: "The selected voice is used for short action summaries",
+        ignoreFocusOut: true,
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
+      if (selected === undefined) {
+        return;
+      }
+      let selectedId: string | undefined;
+      let selectedName = "Spoken feedback disabled";
+      if (selected.action === "manual") {
+        selectedId = await vscode.window.showInputBox({
+          title: "Enter an ElevenLabs voice ID",
+          value: currentId,
+          ignoreFocusOut: true,
+          validateInput: (value) =>
+            /^[A-Za-z0-9_-]{5,100}$/u.test(value.trim())
+              ? undefined
+              : "Enter a valid ElevenLabs voice ID",
+        });
+        if (selectedId === undefined) {
+          return;
+        }
+        selectedId = selectedId.trim();
+        selectedName = selectedId;
+      } else if (selected.action === "voice") {
+        selectedId = selected.voice.id;
+        selectedName = selected.voice.name;
+      }
+      if (selectedId === undefined) {
+        await configuration.update(
+          "ttsEnabled",
+          false,
+          vscode.ConfigurationTarget.Global,
+        );
+      } else {
+        await configuration.update(
+          "voiceId",
+          selectedId,
+          vscode.ConfigurationTarget.Global,
+        );
+        await configuration.update(
+          "ttsEnabled",
+          true,
+          vscode.ConfigurationTarget.Global,
+        );
+      }
+      await this.refreshServiceStatus();
+      if (this.perception.activeMode === "ide") {
+        await this.perception.restart();
+      }
+      this.report(
+        selectedId === undefined
+          ? selectedName
+          : `ElevenLabs feedback voice set to ${selectedName}`,
+      );
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error ? error.message : "voice configuration failed";
+      this.report(`ElevenLabs voice configuration failed: ${detail}`);
+      void vscode.window.showErrorMessage(
+        `Chudvis ElevenLabs voice setup: ${detail}`,
+      );
+    }
+  }
+
+  private testElevenLabsVoice(): void {
+    const configuration =
+      vscode.workspace.getConfiguration("chudvis.elevenLabs");
+    if (!configuration.get<boolean>("ttsEnabled", true)) {
+      void vscode.window.showWarningMessage(
+        "Chudvis spoken feedback is disabled. Choose a voice to enable it.",
+      );
+      return;
+    }
+    if (
+      this.perception.activeMode !== "ide" ||
+      this.bridge?.connected !== true
+    ) {
+      void vscode.window.showWarningMessage(
+        "Start Chudvis controls before testing the ElevenLabs voice.",
+      );
+      return;
+    }
+    this.bridge.sendNotification("voice.speak", {
+      text: "Chudvis voice feedback is ready.",
+    });
+    this.report("Testing the configured ElevenLabs feedback voice");
+  }
+
   private async confirmElevenLabsSetup(): Promise<boolean> {
     const voiceEnabled = vscode.workspace
       .getConfiguration("chudvis.runtime")
@@ -366,8 +631,34 @@ class ExtensionRuntime implements vscode.Disposable {
   }
 
   private async dispatch(notification: BridgeNotification): Promise<void> {
+    if (notification.method === "diagnostic.event") {
+      this.diagnostics.recordRemote(notification.params);
+      return;
+    }
     const voice = parseChudvisInbound(notification);
     if (voice !== undefined) {
+      if (voice.method === "voice.partial") {
+        this.diagnostics.record(
+          "speech",
+          "transcript.partial",
+          { text: voice.text },
+          voice.requestId,
+        );
+      } else if (voice.method === "voice.request") {
+        this.diagnostics.record(
+          "speech",
+          "transcript.committed",
+          { transcript: voice.transcript },
+          voice.requestId,
+        );
+      } else if (voice.method === "voice.state") {
+        this.diagnostics.record(
+          "speech",
+          "state.changed",
+          { state: voice.state, detail: voice.detail },
+          voice.requestId,
+        );
+      }
       await this.chudvis.handleInbound(voice);
       return;
     }
@@ -467,6 +758,13 @@ class ExtensionRuntime implements vscode.Disposable {
           this.output.info(detail);
           this.status.setBridge(connected, detail);
         },
+        (direction, notification, delivered) => {
+          this.diagnostics.record("bridge", direction, {
+            method: notification.method,
+            params: notification.params,
+            delivered,
+          });
+        },
       );
       this.bridge = bridge;
       try {
@@ -553,6 +851,35 @@ class ExtensionRuntime implements vscode.Disposable {
       this.report(detail);
       void vscode.window.showErrorMessage(detail);
     }
+  }
+
+  private async followDiagnostics(): Promise<void> {
+    await this.diagnostics.flush();
+    const filePath = this.diagnostics.filePath;
+    const terminal =
+      process.platform === "win32"
+        ? vscode.window.createTerminal({
+            name: "Chudvis Diagnostics",
+            shellPath: "powershell.exe",
+            shellArgs: [
+              "-NoLogo",
+              "-NoExit",
+              "-Command",
+              `Get-Content -LiteralPath '${filePath.replaceAll("'", "''")}' -Tail 200 -Wait`,
+            ],
+          })
+        : vscode.window.createTerminal({
+            name: "Chudvis Diagnostics",
+            shellPath: process.env.SHELL ?? "/bin/sh",
+            shellArgs: [
+              "-lc",
+              `tail -n 200 -f -- '${filePath.replaceAll("'", "'\"'\"'")}'`,
+            ],
+          });
+    terminal.show(false);
+    this.diagnostics.record("lifecycle", "terminal-follow.started", {
+      logFile: filePath,
+    });
   }
 
   private async stopControls(): Promise<void> {

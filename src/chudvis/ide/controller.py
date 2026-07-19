@@ -66,6 +66,36 @@ class IdeInteractionController:
         self._active_voice_request: str | None = None
         self._approval_pending = False
 
+    def _diagnostic(
+        self,
+        category: str,
+        name: str,
+        data: object | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        diagnostic = getattr(self.ide, "diagnostic_event", None)
+        if callable(diagnostic):
+            diagnostic(category, name, data, request_id)
+
+    def _gesture_action(
+        self,
+        event: RoleGestureEvent,
+        action: str,
+        outcome: str,
+        **detail: object,
+    ) -> None:
+        self._diagnostic(
+            "action",
+            f"gesture.{outcome}",
+            {
+                "gesture": event.gesture.type.value,
+                "role": event.role.value,
+                "action": action,
+                "controllerState": self.state.value,
+                **detail,
+            },
+        )
+
     def _pixels(self, point: Point) -> Point:
         return Point(point.x * self.screen_size[0], point.y * self.screen_size[1])
 
@@ -73,10 +103,14 @@ class IdeInteractionController:
         if not self.gaze_gate.accepts(sample):
             return
         self.latest_gaze = sample
-        if self.state in (
-            IdeControllerState.TRACKING,
-            IdeControllerState.AGENT_WORKING,
-        ) and self.locked_gaze is None:
+        if (
+            self.state
+            in (
+                IdeControllerState.TRACKING,
+                IdeControllerState.AGENT_WORKING,
+            )
+            and self.locked_gaze is None
+        ):
             self.input.move_pointer(self._pixels(sample.point))
 
     def _toggle_pause(self) -> None:
@@ -155,12 +189,14 @@ class IdeInteractionController:
         gesture = event.gesture
         if gesture.type == GestureType.DICTATION_TOGGLE:
             self._handle_dictation()
+            self._gesture_action(event, "dictation.toggle", "executed")
             return
         if self.state not in (
             IdeControllerState.TRACKING,
             IdeControllerState.AGENT_WORKING,
             IdeControllerState.REQUEST_PENDING,
         ):
+            self._gesture_action(event, "none", "ignored", reason="controller state")
             return
         if gesture.type == GestureType.PINCH_START:
             if (
@@ -169,25 +205,52 @@ class IdeInteractionController:
             ):
                 if self.ide.arm_selection(self.settings.selection_timeout_seconds):
                     self.locked_gaze = self.latest_gaze
+                    self._gesture_action(
+                        event,
+                        "selection.arm",
+                        "executed",
+                        timeoutSeconds=self.settings.selection_timeout_seconds,
+                    )
                 else:
                     self.status("Selection ignored: the IDE extension is disconnected")
+                    self._gesture_action(
+                        event, "selection.arm", "ignored", reason="IDE disconnected"
+                    )
             else:
                 self.status("Selection ignored: gaze tracking is unavailable")
+                self._gesture_action(event, "selection.arm", "ignored", reason="gaze unavailable")
         elif gesture.type == GestureType.PINCH_CANCEL:
             self.locked_gaze = None
             self.ide.cancel_selection()
+            self._gesture_action(event, "selection.cancel", "executed")
         elif gesture.type == GestureType.CLICK:
             if self.locked_gaze is not None:
-                self.input.click(self._pixels(self.locked_gaze.point))
+                point = self._pixels(self.locked_gaze.point)
+                self.input.click(point)
                 self.status("Semantic selection requested")
+                self._gesture_action(
+                    event,
+                    "pointer.click",
+                    "executed",
+                    x=round(point.x),
+                    y=round(point.y),
+                )
+            else:
+                self._gesture_action(event, "pointer.click", "ignored", reason="gaze not locked")
             self.locked_gaze = None
         elif gesture.type == GestureType.DRAG_START:
             self.locked_gaze = None
             self.ide.cancel_selection()
+            self._gesture_action(event, "selection.cancel", "executed")
         elif gesture.type == GestureType.SCROLL:
             lines = round(gesture.delta.y * self.gestures.scroll_scale)
             if lines:
                 self.ide.scroll_editor(lines)
+                self._gesture_action(event, "editor.scroll", "executed", lines=lines)
+            else:
+                self._gesture_action(event, "editor.scroll", "ignored", reason="zero lines")
+        else:
+            self._gesture_action(event, "none", "ignored", reason="no IDE mapping")
 
     def _on_navigator_gesture(self, event: RoleGestureEvent) -> None:
         gesture = event.gesture
@@ -196,23 +259,38 @@ class IdeInteractionController:
             IdeControllerState.AGENT_WORKING,
             IdeControllerState.REQUEST_PENDING,
         ):
+            self._gesture_action(event, "none", "ignored", reason="controller state")
             return
         if gesture.type != GestureType.SCROLL:
+            self._gesture_action(event, "none", "ignored", reason="no navigator mapping")
             return
-        if (
-            gesture.timestamp - self._last_navigation_at
-            < self.settings.navigation_cooldown_seconds
-        ):
+        if gesture.timestamp - self._last_navigation_at < self.settings.navigation_cooldown_seconds:
+            self._gesture_action(event, "review.navigate", "ignored", reason="cooldown")
             return
         direction = -1 if gesture.delta.y < 0 else 1
         self.ide.navigate_change(direction)
         self._last_navigation_at = gesture.timestamp
+        self._gesture_action(event, "review.navigate", "executed", direction=direction)
 
     def on_gesture(self, event: RoleGestureEvent) -> None:
+        self._diagnostic(
+            "gesture",
+            "committed",
+            {
+                "type": event.gesture.type.value,
+                "role": event.role.value,
+                "confidence": event.gesture.confidence,
+                "delta": {"x": event.gesture.delta.x, "y": event.gesture.delta.y},
+                "timestamp": event.gesture.timestamp,
+                "controllerState": self.state.value,
+            },
+        )
         if event.gesture.type == GestureType.PAUSE_TOGGLE:
             self._toggle_pause()
+            self._gesture_action(event, "control.pause-toggle", "executed")
             return
         if self.state == IdeControllerState.PAUSED:
+            self._gesture_action(event, "none", "ignored", reason="controls paused")
             return
         if event.role == HandRole.EDITOR:
             self._on_editor_gesture(event)
@@ -225,6 +303,12 @@ class IdeInteractionController:
         if self.voice_session is not None:
             for event in self.voice_session.poll():
                 if event.type == VoiceEventType.STATE and event.state is not None:
+                    self._diagnostic(
+                        "speech",
+                        "runtime.state",
+                        {"state": event.state.value, "detail": event.detail},
+                        event.request_id,
+                    )
                     self.ide.voice_state(event.state, event.request_id, event.detail)
                     if event.state == VoiceState.READY:
                         self._active_voice_request = None
@@ -232,8 +316,20 @@ class IdeInteractionController:
                         if self.state != IdeControllerState.PAUSED:
                             self.state = IdeControllerState.TRACKING
                 elif event.type == VoiceEventType.PARTIAL and event.request_id is not None:
+                    self._diagnostic(
+                        "speech",
+                        "transcript.partial",
+                        {"text": event.text},
+                        event.request_id,
+                    )
                     self.ide.voice_partial(event.request_id, event.text)
                 elif event.type == VoiceEventType.REQUEST and event.request_id is not None:
+                    self._diagnostic(
+                        "speech",
+                        "transcript.committed",
+                        {"transcript": event.text},
+                        event.request_id,
+                    )
                     self._active_voice_request = event.request_id
                     self.state = IdeControllerState.AGENT_WORKING
                     self.ide.voice_request(event.request_id, event.text)
@@ -244,6 +340,9 @@ class IdeInteractionController:
         try:
             transcript = self._transcription.result().strip()
             if transcript:
+                self._diagnostic(
+                    "speech", "transcript.committed", {"transcript": transcript, "engine": "local"}
+                )
                 self.ide.show_request(transcript)
                 self.state = IdeControllerState.REQUEST_PENDING
                 self.status("Request ready; hold thumbs-up to send or an open palm to cancel")
@@ -262,9 +361,7 @@ class IdeInteractionController:
         if not isinstance(method, str) or not isinstance(params, dict):
             return
         request_id = params.get("requestId")
-        if request_id is not None and (
-            not isinstance(request_id, str) or len(request_id) > 100
-        ):
+        if request_id is not None and (not isinstance(request_id, str) or len(request_id) > 100):
             return
         if method == "voice.cancel":
             if self.voice_session is not None:
@@ -281,8 +378,16 @@ class IdeInteractionController:
                 or len(summary) > 160
             ):
                 return
-            if self.voice_session.complete(request_id, status, summary):
+            completed = self.voice_session.complete(request_id, status, summary)
+            if not completed and summary:
+                completed = self.voice_session.speak(summary)
+            if completed:
                 self._approval_pending = False
+            return
+        if method == "voice.speak":
+            text = params.get("text")
+            if self.voice_session is not None and isinstance(text, str) and 0 < len(text) <= 160:
+                self.voice_session.speak(text)
             return
         if method == "edit.approvalRequested":
             if request_id != self._active_voice_request:

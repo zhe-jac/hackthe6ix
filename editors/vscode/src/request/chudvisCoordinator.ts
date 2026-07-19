@@ -2,6 +2,8 @@ import * as path from "node:path";
 
 import * as vscode from "vscode";
 
+import type { DiagnosticLog } from "../diagnostics/diagnosticLog";
+
 import type { BridgeServer } from "../bridge/server";
 import { EditContextResolver } from "../editor/contextResolver";
 import {
@@ -88,6 +90,7 @@ export class ChudvisCoordinator implements vscode.Disposable {
     private readonly output: vscode.LogOutputChannel,
     private readonly bridge: () => BridgeServer | undefined,
     private readonly report: (message: string) => void,
+    private readonly diagnostics?: DiagnosticLog,
   ) {
     this.contextResolver = new EditContextResolver(selection);
   }
@@ -164,6 +167,12 @@ export class ChudvisCoordinator implements vscode.Disposable {
   ): Promise<void> {
     try {
       const route = routeVoiceRequest(transcript);
+      this.diagnostics?.record(
+        "router",
+        "voice.route",
+        { transcript, route },
+        requestId,
+      );
       switch (route.kind) {
         case "open":
           await this.openFile(route.query);
@@ -205,6 +214,13 @@ export class ChudvisCoordinator implements vscode.Disposable {
           return;
         case "edit":
           await this.edit(requestId, route.instruction);
+          return;
+        case "unsupported": {
+          const preview = route.instruction.slice(0, 160);
+          throw new Error(
+            `Chudvis could not identify an action in “${preview}”. Use an explicit command such as create, open, make, fix, rename, or explain.`,
+          );
+        }
       }
     } catch (error: unknown) {
       if (this.completed.includes(requestId)) {
@@ -222,9 +238,27 @@ export class ChudvisCoordinator implements vscode.Disposable {
   private async answer(requestId: string, instruction: string): Promise<void> {
     this.presentVoiceState("understanding", "Answering without editing");
     const target = await this.contextResolver.resolve(instruction);
+    this.diagnostics?.record(
+      "router",
+      "target.resolved",
+      {
+        kind: "question",
+        label: target.label,
+        path: target.relativePath,
+        symbol: target.symbolName,
+        range: {
+          startLine: target.range.start.line + 1,
+          endLine: target.range.end.line + 1,
+        },
+      },
+      requestId,
+    );
     this.sidebar.setTarget(target.label);
-    await this.provider.answer(instruction, target, (chunk) =>
-      this.sidebar.appendAnswer(chunk),
+    await this.provider.answer(
+      instruction,
+      target,
+      (chunk) => this.sidebar.appendAnswer(chunk),
+      requestId,
     );
     this.sidebar.finishAnswer();
     this.report("Chudvis answer is ready in the sidebar");
@@ -234,6 +268,21 @@ export class ChudvisCoordinator implements vscode.Disposable {
   private async edit(requestId: string, instruction: string): Promise<void> {
     this.presentVoiceState("editing", "Resolving a bounded edit target");
     const target = await this.contextResolver.resolve(instruction);
+    this.diagnostics?.record(
+      "router",
+      "target.resolved",
+      {
+        kind: "edit",
+        label: target.label,
+        path: target.relativePath,
+        symbol: target.symbolName,
+        range: {
+          startLine: target.range.start.line + 1,
+          endLine: target.range.end.line + 1,
+        },
+      },
+      requestId,
+    );
     this.sidebar.setTarget(target.label);
     const model = await this.provider.startEdit(
       requestId,
@@ -259,6 +308,16 @@ export class ChudvisCoordinator implements vscode.Disposable {
       throw error;
     }
     this.editReview.prepare(plan);
+    this.diagnostics?.record(
+      "edit",
+      "proposal.validated",
+      {
+        files: plan.files,
+        changeCount: plan.changeCount,
+        requiresApproval: plan.requiresApproval,
+      },
+      requestId,
+    );
     if (plan.requiresApproval) {
       this.pending = { model, plan };
       this.sidebar.setApprovalPending(true);
@@ -328,6 +387,12 @@ export class ChudvisCoordinator implements vscode.Disposable {
       );
     }
     const summary = spokenSummary ?? applied.summary;
+    this.diagnostics?.record(
+      "edit",
+      "changes.applied",
+      { files: applied.files, changeCount: applied.changeCount, summary },
+      model.requestId,
+    );
     this.sidebar.setSummary(summary, true);
     this.report(summary);
     this.complete(model.requestId, "succeeded", summary);
@@ -619,6 +684,12 @@ export class ChudvisCoordinator implements vscode.Disposable {
       params.spokenSummary = spokenSummary.slice(0, 160);
     }
     this.bridge()?.sendNotification("voice.complete", params);
+    this.diagnostics?.record(
+      "request",
+      "completed",
+      { status, spokenSummary },
+      requestId,
+    );
   }
 
   public dispose(): void {

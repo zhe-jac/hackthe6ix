@@ -1,3 +1,5 @@
+import type { ReadableStream } from "node:stream/web";
+
 const DEFAULT_BASE_URL = "https://app.backboard.io/api";
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_SSE_EVENT_BYTES = 262_144;
@@ -12,6 +14,29 @@ export interface BackboardModel {
   readonly name: string;
   readonly contextLimit: number;
   readonly supportsTools: boolean;
+}
+
+export interface BackboardDiagnosticEvent {
+  readonly phase: "request" | "response" | "stream" | "error";
+  readonly path: string;
+  readonly method: string;
+  readonly status?: number;
+  readonly durationMs?: number;
+  readonly payload?: unknown;
+  readonly error?: string;
+}
+
+export type BackboardDiagnosticObserver = (
+  event: BackboardDiagnosticEvent,
+) => void;
+
+class BackboardHttpError extends Error {
+  public constructor(
+    public readonly status: number,
+    public readonly responseBody: string,
+  ) {
+    super(`Backboard request failed with HTTP status ${status}`);
+  }
 }
 
 function objectValue(value: unknown, label: string): Record<string, unknown> {
@@ -135,6 +160,8 @@ export interface StreamResult {
 }
 
 export class BackboardClient {
+  private diagnosticObserver: BackboardDiagnosticObserver | undefined;
+
   public constructor(
     private readonly apiKey: string,
     private readonly timeoutMs: number,
@@ -144,6 +171,14 @@ export class BackboardClient {
     if (apiKey.trim().length === 0) {
       throw new Error("Backboard API key is not configured");
     }
+  }
+
+  public setDiagnosticObserver(observer: BackboardDiagnosticObserver): void {
+    this.diagnosticObserver = observer;
+  }
+
+  private observe(event: BackboardDiagnosticEvent): void {
+    this.diagnosticObserver?.(event);
   }
 
   private async fetch(
@@ -163,10 +198,8 @@ export class BackboardClient {
       });
       if (!response.ok) {
         try {
-          await boundedResponseText(response);
-          throw new Error(
-            `Backboard request failed with HTTP status ${response.status}`,
-          );
+          const responseBody = await boundedResponseText(response);
+          throw new BackboardHttpError(response.status, responseBody);
         } finally {
           timed.dispose();
         }
@@ -184,22 +217,47 @@ export class BackboardClient {
     body?: unknown,
     signal?: AbortSignal,
   ): Promise<Record<string, unknown>> {
-    const timed = await this.fetch(
-      path,
-      {
-        method,
-        body: body === undefined ? undefined : JSON.stringify(body),
-      },
-      signal,
-    );
+    const started = Date.now();
+    this.observe({ phase: "request", path, method, payload: body });
+    let timed: TimedResponse | undefined;
     try {
+      timed = await this.fetch(
+        path,
+        {
+          method,
+          body: body === undefined ? undefined : JSON.stringify(body),
+        },
+        signal,
+      );
       const text = await boundedResponseText(timed.response);
-      if (text.length === 0) {
-        return {};
-      }
-      return objectValue(JSON.parse(text) as unknown, "JSON");
+      const result =
+        text.length === 0
+          ? {}
+          : objectValue(JSON.parse(text) as unknown, "JSON");
+      this.observe({
+        phase: "response",
+        path,
+        method,
+        status: timed.response.status,
+        durationMs: Date.now() - started,
+        payload: result,
+      });
+      return result;
+    } catch (error: unknown) {
+      this.observe({
+        phase: "error",
+        path,
+        method,
+        status: error instanceof BackboardHttpError ? error.status : undefined,
+        durationMs: Date.now() - started,
+        payload:
+          error instanceof BackboardHttpError ? error.responseBody : undefined,
+        error:
+          error instanceof Error ? error.message : "unknown Backboard error",
+      });
+      throw error;
     } finally {
-      timed.dispose();
+      timed?.dispose();
     }
   }
 
@@ -301,12 +359,17 @@ export class BackboardClient {
       runId: string | undefined,
     ) => void,
   ): Promise<StreamResult> {
-    const timed = await this.fetch(
-      "/threads/messages",
-      { method: "POST", body: JSON.stringify(body) },
-      signal,
-    );
+    const path = "/threads/messages";
+    const method = "POST";
+    const started = Date.now();
+    this.observe({ phase: "request", path, method, payload: body });
+    let timed: TimedResponse | undefined;
     try {
+      timed = await this.fetch(
+        path,
+        { method, body: JSON.stringify(body) },
+        signal,
+      );
       if (timed.response.body === null) {
         throw new Error("Backboard streaming response is empty");
       }
@@ -333,6 +396,7 @@ export class BackboardClient {
           decoder.decode(chunk.value, { stream: true }),
         )) {
           const event = objectValue(raw, "SSE event");
+          this.observe({ phase: "stream", path, method, payload: event });
           threadId =
             stringValue(event.thread_id, "thread_id", false) ?? threadId;
           runId = stringValue(event.run_id, "run_id", false) ?? runId;
@@ -355,9 +419,31 @@ export class BackboardClient {
           }
         }
       }
-      return { threadId, runId, content };
+      const result = { threadId, runId, content };
+      this.observe({
+        phase: "response",
+        path,
+        method,
+        status: timed.response.status,
+        durationMs: Date.now() - started,
+        payload: result,
+      });
+      return result;
+    } catch (error: unknown) {
+      this.observe({
+        phase: "error",
+        path,
+        method,
+        status: error instanceof BackboardHttpError ? error.status : undefined,
+        durationMs: Date.now() - started,
+        payload:
+          error instanceof BackboardHttpError ? error.responseBody : undefined,
+        error:
+          error instanceof Error ? error.message : "unknown Backboard error",
+      });
+      throw error;
     } finally {
-      timed.dispose();
+      timed?.dispose();
     }
   }
 }
@@ -369,4 +455,3 @@ export function backboardString(
 ): string | undefined {
   return stringValue(response[field], field, required);
 }
-import type { ReadableStream } from "node:stream/web";

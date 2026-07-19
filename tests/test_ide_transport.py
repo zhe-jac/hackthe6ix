@@ -61,3 +61,13 @@ def test_transport_handshake_send_and_receive() -> None:
     finally:
         transport.close()
         listener.close()
+
+
+def test_low_priority_diagnostics_leave_queue_capacity_for_actions() -> None:
+    transport = IdeTransport("127.0.0.1", 1, status=lambda _message: None)
+
+    for index in range(transport._outbound.maxsize // 2):
+        assert transport.notify("diagnostic.event", {"index": index}, low_priority=True)
+
+    assert not transport.notify("diagnostic.event", low_priority=True)
+    assert transport.notify("editor.scroll", {"lines": 1}, continuous=True)

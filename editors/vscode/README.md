@@ -24,13 +24,22 @@ or either hand.
 The sidebar also shows Backboard and ElevenLabs setup status. Enter either key there or use the
 matching **Configure ... API Key** command; both are stored in VS Code SecretStorage. The saved
 ElevenLabs key is injected only into the supervised native process. Workspace `.env` files are not
-loaded. The sidebar also shows microphone/request state, partial transcripts, answers, edit targets,
-applied summaries, review actions, Undo, and Clear Memory. Basic navigation and questions remain
-silent; only a successful code edit (or short edit failure) can produce an ElevenLabs TTS response.
+loaded. Use **Choose Voice** to select or disable the ElevenLabs voice and **Test Voice** to verify
+playback while controls are running. The sidebar also shows microphone/request state, partial
+transcripts, answers, edit targets, applied summaries, review actions, Undo, and Clear Memory.
+Questions remain silent; successful file creation and code edits can produce a short ElevenLabs TTS
+summary.
 
 The bridge listens only on the configured loopback address. Camera frames, microphone audio,
 source code, full transcripts, provider reasoning, API keys, and TTS bytes are not written to the
-extension output channel. Post-wake microphone audio is sent by Python to ElevenLabs, while only
-the resolved source/context is sent by this extension to Backboard.
+normal extension output channel. The separate local diagnostics stream records gesture/action
+outcomes, exact recognized speech, bridge traffic, routing, and model request metadata. Exact model
+prompts, workspace-tool data, and responses require the explicit **Capture exact model payloads**
+toggle; credentials and session tokens are always redacted. Post-wake microphone audio is sent by
+Python to ElevenLabs, while only the resolved source/context is sent by this extension to Backboard.
+
+Use **Open Live Diagnostics** in the sidebar, **Chudvis: Show Diagnostics** in the Command Palette,
+or **Chudvis: Follow Diagnostics in Terminal**. See `docs/diagnostics.md` in the repository for the
+event schema, privacy behavior, and JSONL workflow.
 
 See the repository's main README and `docs/ide-mode.md` for installation and usage.

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   fileMatchScore,
+  isSupportedCreateFilePath,
   normalizeSpokenFileQuery,
   requestedFilePath,
 } from "../voice/fileIntent";
@@ -22,6 +23,14 @@ void test("typed file creation adds the requested extension", () => {
     "tools/check.py",
   );
   assert.equal(requestedFilePath(undefined, "notes.md"), "notes.md");
+  assert.equal(isSupportedCreateFilePath("tools slash check dot P Y"), true);
+  assert.equal(isSupportedCreateFilePath("this function return early"), false);
+  assert.equal(
+    isSupportedCreateFilePath(
+      "a simple for loop that counts from one to 10 in test.py",
+    ),
+    false,
+  );
 });
 
 void test("file matching tolerates a bounded speech typo", () => {

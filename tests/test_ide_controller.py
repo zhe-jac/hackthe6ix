@@ -48,6 +48,7 @@ class FakeVoiceSession:
         self.events: list[VoiceEvent] = []
         self.cancelled: list[str | None] = []
         self.completions: list[tuple[str, str, str]] = []
+        self.spoken: list[str] = []
         self.paused: list[bool] = []
 
     def start(self) -> None:
@@ -64,6 +65,10 @@ class FakeVoiceSession:
 
     def complete(self, request_id: str, status: str, spoken_summary: str = "") -> bool:
         self.completions.append((request_id, status, spoken_summary))
+        return True
+
+    def speak(self, text: str) -> bool:
+        self.spoken.append(text)
         return True
 
     def set_paused(self, paused: bool) -> None:
@@ -119,12 +124,31 @@ def test_hand_roles_route_scroll_to_different_actions() -> None:
     controller.on_gesture(
         _role_event(HandRole.NAVIGATOR, GestureType.SCROLL, 1.0, Point(0.0, -0.1))
     )
-    controller.on_gesture(
-        _role_event(HandRole.EDITOR, GestureType.SCROLL, 1.1, Point(0.0, 0.1))
-    )
+    controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.SCROLL, 1.1, Point(0.0, 0.1)))
 
     assert ("navigate_change", -1) in ide.events
     assert ("scroll_editor", 5) in ide.events
+
+
+def test_gesture_diagnostics_distinguish_commit_from_execution() -> None:
+    controller, _inputs, ide = _controller()
+
+    controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.SCROLL, 1.0, Point(0.0, 0.1)))
+
+    assert any(
+        event["category"] == "gesture"
+        and event["name"] == "committed"
+        and isinstance(event["data"], dict)
+        and event["data"]["type"] == "scroll"
+        for event in ide.diagnostics
+    )
+    assert any(
+        event["category"] == "action"
+        and event["name"] == "gesture.executed"
+        and isinstance(event["data"], dict)
+        and event["data"]["action"] == "editor.scroll"
+        for event in ide.diagnostics
+    )
 
 
 def test_disconnected_extension_prevents_raw_selection_click() -> None:
@@ -244,3 +268,18 @@ def test_wake_voice_prevents_competing_local_dictation_and_pauses_with_ide() -> 
     controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.PAUSE_TOGGLE, 1.0))
     controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.PAUSE_TOGGLE, 2.0))
     assert voice.paused == [True, False]
+
+
+def test_sidebar_voice_test_is_forwarded_to_the_speaker() -> None:
+    voice = FakeVoiceSession()
+    controller, _inputs, ide = _controller(voice_session=voice)
+    ide.inbound.append(
+        {
+            "method": "voice.speak",
+            "params": {"text": "Chudvis voice feedback is ready."},
+        }
+    )
+
+    controller.poll()
+
+    assert voice.spoken == ["Chudvis voice feedback is ready."]

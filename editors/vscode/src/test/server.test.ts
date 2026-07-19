@@ -15,6 +15,11 @@ void test("bridge authenticates then dispatches notifications", async (context) 
   const received = new Promise<BridgeNotification>((resolve) => {
     resolveNotification = resolve;
   });
+  const traffic: {
+    direction: string;
+    method: string;
+    delivered: boolean;
+  }[] = [];
   const server = new BridgeServer(
     {
       host: "127.0.0.1",
@@ -24,6 +29,8 @@ void test("bridge authenticates then dispatches notifications", async (context) 
     },
     (notification) => resolveNotification?.(notification),
     () => undefined,
+    (direction, notification, delivered) =>
+      traffic.push({ direction, method: notification.method, delivered }),
   );
   const port = await server.start();
   const socket = net.createConnection({ host: "127.0.0.1", port });
@@ -45,6 +52,16 @@ void test("bridge authenticates then dispatches notifications", async (context) 
   const notification = await received;
   assert.equal(notification.method, "editor.scroll");
   assert.deepEqual(notification.params, { lines: 7 });
+  assert.deepEqual(traffic.slice(0, 2), [
+    { direction: "received", method: "bridge.hello", delivered: true },
+    { direction: "sent", method: "bridge.status", delivered: true },
+  ]);
+  assert.ok(
+    traffic.some(
+      (event) =>
+        event.direction === "received" && event.method === "editor.scroll",
+    ),
+  );
 });
 
 void test("bridge rejects an invalid session token", async (context) => {

@@ -12,6 +12,7 @@ const FORMAT_EXTENSIONS: Readonly<Record<string, string>> = {
   yaml: ".yaml",
   yml: ".yml",
 };
+const SUPPORTED_CREATE_EXTENSIONS = new Set(Object.values(FORMAT_EXTENSIONS));
 
 function stripOuterQuotes(value: string): string {
   const trimmed = value.trim();
@@ -67,6 +68,16 @@ export function requestedFilePath(
     return `${requested}${extension}`;
   }
   return requested;
+}
+
+export function isSupportedCreateFilePath(value: string): boolean {
+  const normalized = normalizeSpokenPath(value).replaceAll("\\", "/");
+  if (normalized.length === 0 || /\s/u.test(normalized)) {
+    return false;
+  }
+  return SUPPORTED_CREATE_EXTENSIONS.has(
+    path.posix.extname(normalized).toLowerCase(),
+  );
 }
 
 function editDistance(left: string, right: string): number {

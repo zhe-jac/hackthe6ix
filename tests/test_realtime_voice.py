@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
 from time import monotonic, sleep
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 
 from chudvis.core.config import VoiceSettings
 from chudvis.speech.realtime_voice import (
+    AudioCaptureStatus,
     VoiceEvent,
     VoiceEventType,
     VoiceSession,
     VoiceState,
+    _isolated_audio_capture_worker,
     float_samples_to_pcm16,
 )
 
@@ -64,9 +68,9 @@ class FakeInputStream:
     def start(self) -> None:
         self.started = True
 
-    def push(self, value: float) -> None:
+    def push(self, value: float, status: Any = None) -> None:
         samples = np.full((1600, 1), value, dtype=np.float32)
-        self.callback(samples, len(samples), None, None)
+        self.callback(samples, len(samples), None, status)
 
     def stop(self) -> None:
         self.started = False
@@ -151,6 +155,69 @@ def test_float_audio_is_clipped_and_encoded_as_little_endian_pcm16() -> None:
     assert values == [-32767, -32767, 0, 16383, 32767, 32767]
 
 
+def test_isolated_capture_worker_uses_blocking_contiguous_reads(monkeypatch: Any) -> None:
+    class StopAfterOneRead:
+        checks = 0
+
+        def is_set(self) -> bool:
+            self.checks += 1
+            return self.checks > 1
+
+    class FakeMicrophone:
+        def __enter__(self) -> FakeMicrophone:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def read(self, frames: int) -> tuple[np.ndarray, bool]:
+            return np.full((frames, 1), 0.25, dtype=np.float32), True
+
+    class RecordingPipe:
+        def __init__(self) -> None:
+            self.messages: list[tuple[str, str]] = []
+
+        def send(self, message: tuple[str, str]) -> None:
+            self.messages.append(message)
+
+        def close(self) -> None:
+            pass
+
+    class RecordingQueue:
+        def __init__(self) -> None:
+            self.items: list[tuple[object, ...]] = []
+
+        def put(self, item: tuple[object, ...], timeout: float) -> None:
+            del timeout
+            self.items.append(item)
+
+    fake_sounddevice = SimpleNamespace(
+        query_devices=lambda _device, _kind: {"name": "Test microphone"},
+        InputStream=lambda **_kwargs: FakeMicrophone(),
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
+    chunks = RecordingQueue()
+    started = RecordingPipe()
+
+    _isolated_audio_capture_worker(
+        16_000,
+        1_600,
+        "",
+        StopAfterOneRead(),
+        chunks,
+        started,
+    )
+
+    assert started.messages == [("ready", "Test microphone")]
+    assert len(chunks.items) == 1
+    kind, raw, overflowed, dropped = chunks.items[0]
+    assert kind == "audio"
+    assert isinstance(raw, bytes)
+    assert np.allclose(np.frombuffer(raw, dtype="<f4"), 0.25)
+    assert overflowed is True
+    assert dropped == 0
+
+
 def test_no_transport_or_audio_exists_before_wake_activation() -> None:
     harness = Harness()
     try:
@@ -188,8 +255,7 @@ def test_post_activation_audio_is_buffered_during_handshake_then_transcribed() -
 
         assert len(harness.transport.sent) >= 2
         assert any(
-            event.type == VoiceEventType.PARTIAL and event.text == "open"
-            for event in events
+            event.type == VoiceEventType.PARTIAL and event.text == "open" for event in events
         )
         request = next(event for event in events if event.type == VoiceEventType.REQUEST)
         assert request.text == "open file README.md"
@@ -230,6 +296,21 @@ def test_completion_speaks_once_then_rearms_wake_detection() -> None:
         harness.close()
 
 
+def test_explicit_speech_feedback_works_while_waiting_for_the_wake_word() -> None:
+    speaker = FakeSpeaker()
+    harness = Harness(speaker=speaker)
+    try:
+        assert harness.session.speak("Chudvis voice feedback is ready.")
+        finished = harness.events_until(
+            lambda values: state_seen(values, VoiceState.SPEAKING) and bool(speaker.spoken)
+        )
+
+        assert state_seen(finished, VoiceState.SPEAKING)
+        assert speaker.spoken == ["Chudvis voice feedback is ready."]
+    finally:
+        harness.close()
+
+
 def test_cancel_rearms_and_stale_completion_is_rejected() -> None:
     harness = Harness()
     try:
@@ -261,6 +342,24 @@ def test_bounded_audio_queue_drops_oldest_chunks_without_blocking_callback() -> 
         assert harness.session.dropped_audio_chunks > 0
     finally:
         gate.set()
+        harness.close()
+
+
+def test_audio_capture_loss_is_counted_and_reported() -> None:
+    harness = Harness()
+    try:
+        harness.stream.push(
+            0.1,
+            AudioCaptureStatus(input_overflow=True, dropped_chunks=1),
+        )
+        events = harness.events_until(
+            lambda values: any("Microphone lost" in event.detail for event in values)
+        )
+
+        assert harness.session.capture_overflows == 1
+        assert harness.session.capture_dropped_chunks == 1
+        assert any("wake recognition may miss words" in event.detail for event in events)
+    finally:
         harness.close()
 
 
@@ -302,6 +401,10 @@ def test_tts_failure_does_not_undo_completion_or_prevent_rearming() -> None:
         completed = harness.events_until(lambda values: state_seen(values, VoiceState.READY))
 
         assert state_seen(completed, VoiceState.ERROR)
+        assert any(
+            event.state == VoiceState.READY and "speaker failed" in event.detail
+            for event in completed
+        )
         assert harness.session.state == VoiceState.READY
     finally:
         harness.close()

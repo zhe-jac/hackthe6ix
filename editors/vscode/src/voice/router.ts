@@ -1,4 +1,4 @@
-import { requestedFilePath } from "./fileIntent";
+import { isSupportedCreateFilePath, requestedFilePath } from "./fileIntent";
 
 export type VoiceRoute =
   | { readonly kind: "open"; readonly query: string }
@@ -8,12 +8,13 @@ export type VoiceRoute =
   | { readonly kind: "undo" }
   | { readonly kind: "cancel" }
   | { readonly kind: "question"; readonly instruction: string }
-  | { readonly kind: "edit"; readonly instruction: string };
+  | { readonly kind: "edit"; readonly instruction: string }
+  | { readonly kind: "unsupported"; readonly instruction: string };
 
 const QUESTION_PREFIX =
-  /^(?:please\s+)?(?:explain|analy[sz]e|why|what|how)\b/iu;
+  /^(?:please\s+)?(?:explain|analy[sz]e|why|what|how|describe|summarize|tell\s+me)\b/iu;
 const MUTATION_VERB =
-  /\b(?:add|change|convert|create|delete|extract|fix|implement|insert|move|refactor|remove|rename|replace|update)\b/iu;
+  /\b(?:add|change|convert|create|delete|extract|fix|implement|insert|make|modify|move|refactor|remove|rename|replace|set|update|write)\b/iu;
 
 export function routeVoiceRequest(transcript: string): VoiceRoute {
   const instruction = transcript.trim().replace(/\s+/gu, " ");
@@ -29,13 +30,23 @@ export function routeVoiceRequest(transcript: string): VoiceRoute {
     return { kind: "open", query: match[1].trim() };
   }
   match =
-    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?create\s+(?:(?:a|the)\s+)?(?:new\s+)?(?:(markdown|python|typescript|javascript|text|json|ya?ml|html|css)\s+)?file(?:\s+(?:named|called))?\s+(.+)$/iu.exec(
+    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?(?:create|generate|make)(?:\s+me)?\s+(?:(?:a|the)\s+)?(?:new\s+)?(?:(markdown|python|typescript|javascript|text|json|ya?ml|html|css)\s+)?(?:file|script)(?:\s+(?:named|called))?\s+(.+)$/iu.exec(
       instruction,
     );
   if (match?.[2] !== undefined) {
     return {
       kind: "create",
       path: requestedFilePath(match[1], match[2]),
+    };
+  }
+  match =
+    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?(?:create|generate|make)(?:\s+me)?\s+(.+)$/iu.exec(
+      instruction,
+    );
+  if (match?.[1] !== undefined && isSupportedCreateFilePath(match[1])) {
+    return {
+      kind: "create",
+      path: requestedFilePath(undefined, match[1]),
     };
   }
   match =
@@ -68,5 +79,5 @@ export function routeVoiceRequest(transcript: string): VoiceRoute {
   if (MUTATION_VERB.test(instruction)) {
     return { kind: "edit", instruction };
   }
-  return { kind: "question", instruction };
+  return { kind: "unsupported", instruction };
 }

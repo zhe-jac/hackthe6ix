@@ -102,23 +102,26 @@ microphone -> local Sherpa “Chudvis” -> ElevenLabs WebSocket -> VAD commit -
                                                                        +-> bounded edit
 ```
 
-One continuously owned `sounddevice.InputStream` feeds bounded worker queues. The callback never
-performs network or model work. While ready, samples go only to local Sherpa ONNX; no audio is sent
-over the network before detection. After detection, post-wake samples accumulate while the
-ElevenLabs WebSocket connects, then stream as 16 kHz mono PCM in 100 ms chunks to
-`scribe_v2_realtime`. Server VAD commits after 1.2 seconds of silence. No-speech and maximum-request
-timeouts default to 8 and 30 seconds. Wake detection pauses during request processing and TTS, then
-re-arms automatically.
+One continuously owned `sounddevice.InputStream` uses blocking 100 ms reads in an isolated capture
+process, matching the standalone wake-word tester. This prevents camera/MediaPipe work and the
+Python GIL from interrupting microphone capture. Bounded queues carry the samples back to the local
+Sherpa detector and report input overflows or dropped chunks in the voice status instead of hiding
+them. While ready, samples go only to local Sherpa ONNX; no audio is sent over the network before
+detection. After detection, post-wake samples accumulate while the ElevenLabs WebSocket connects,
+then stream as 16 kHz mono PCM to `scribe_v2_realtime`. Server VAD commits after 1.2 seconds of
+silence. No-speech and maximum-request timeouts default to 8 and 30 seconds. Wake detection pauses
+during request processing and TTS, then re-arms automatically.
 
 Every request requires a fresh wake word. “Cancel,” “never mind,” open palm, the sidebar Cancel
 button, shutdown, and Backboard cancellation all return safely to Ready. If wake streaming cannot
 start, editor-hand thumbs-up retains the existing local Whisper preview/confirmation flow.
 
-The deterministic router handles `create ... file`, `open file`, `go to symbol`, `show references`,
-Undo, and Cancel without Backboard. File creation is limited to a new, non-secret, non-binary
-relative path in an open workspace and never overwrites an existing file. Open-file routing normalizes spoken
-extensions such as “dot P Y” and uses bounded edit-distance matching for minor transcription errors;
-ties require a Quick Pick.
+The deterministic router handles `create` / `make` / `generate ... file`, `open file`, `go to
+symbol`, `show references`, Undo, and Cancel without Backboard. File creation is limited to a new,
+non-secret, non-binary relative path in an open workspace and never overwrites an existing file.
+Open-file routing normalizes spoken extensions such as “dot P Y” and uses bounded edit-distance
+matching for minor transcription errors; ties require a Quick Pick. Unrecognized intent fails with
+an explicit routing error instead of silently falling through to the question model.
 
 `explain`, `analyze`, `why`, `what`, and `how` are questions. Explicit mutation verbs such as
 `change`, `create`, `fix`, `implement`, `remove`, `rename`, `replace`, and `update` are edits when the
@@ -198,8 +201,9 @@ methods are:
 - `control.pause`
 - `voice.state`, `voice.partial`, and `voice.request`
 - `edit.approve` and `edit.cancel`
+- `diagnostic.event` for structured gesture, action, and speech runtime events
 
-Extension-to-Python methods are `voice.cancel`, `voice.complete`, and
+Extension-to-Python methods are `voice.cancel`, `voice.complete`, `voice.speak`, and
 `edit.approvalRequested`; `bridge.status` remains for general status. Both sides validate enums,
 IDs, string lengths, array counts, and total message size, ignore stale request IDs, and make
 completion/cancellation idempotent.

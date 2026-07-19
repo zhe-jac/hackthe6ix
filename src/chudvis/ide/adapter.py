@@ -44,6 +44,14 @@ class IdeAdapter(Protocol):
 
     def cancel_edit(self, request_id: str) -> None: ...
 
+    def diagnostic_event(
+        self,
+        category: str,
+        name: str,
+        data: object | None = None,
+        request_id: str | None = None,
+    ) -> None: ...
+
     def poll(self) -> list[BridgeMessage]: ...
 
 
@@ -117,6 +125,21 @@ class SocketIdeAdapter:
     def cancel_edit(self, request_id: str) -> None:
         self.transport.notify("edit.cancel", {"requestId": request_id})
 
+    def diagnostic_event(
+        self,
+        category: str,
+        name: str,
+        data: object | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        params: dict[str, object] = {"category": category[:80], "name": name[:160]}
+        if data is not None:
+            params["data"] = data
+        if request_id is not None:
+            params["requestId"] = request_id[:100]
+        # Diagnostics must never crowd functional gestures out of the bridge queue.
+        self.transport.notify("diagnostic.event", params, continuous=True, low_priority=True)
+
     def poll(self) -> list[BridgeMessage]:
         inbound: list[BridgeMessage] = []
         for message in self.transport.poll():
@@ -134,6 +157,7 @@ class RecordingIdeAdapter:
 
     def __init__(self) -> None:
         self.events: list[tuple[str, object]] = []
+        self.diagnostics: list[dict[str, object | None]] = []
         self.inbound: list[BridgeMessage] = []
 
     def _record(self, name: str, value: object = None) -> None:
@@ -187,6 +211,17 @@ class RecordingIdeAdapter:
 
     def cancel_edit(self, request_id: str) -> None:
         self._record("cancel_edit", request_id)
+
+    def diagnostic_event(
+        self,
+        category: str,
+        name: str,
+        data: object | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        self.diagnostics.append(
+            {"category": category, "name": name, "data": data, "request_id": request_id}
+        )
 
     def poll(self) -> list[BridgeMessage]:
         messages = self.inbound

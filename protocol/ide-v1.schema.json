@@ -52,9 +52,26 @@
       "properties": {
         "requestId": { "$ref": "#/$defs/requestId" }
       }
+    },
+    "diagnosticEventParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "name"],
+      "properties": {
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "data": {}
+      }
     }
   },
   "allOf": [
+    {
+      "if": { "properties": { "method": { "const": "diagnostic.event" } } },
+      "then": {
+        "properties": { "params": { "$ref": "#/$defs/diagnosticEventParams" } }
+      }
+    },
     {
       "if": { "properties": { "method": { "const": "voice.state" } } },
       "then": { "properties": { "params": { "$ref": "#/$defs/voiceStateParams" } } }
@@ -127,6 +144,21 @@
               "requestId": { "$ref": "#/$defs/requestId" },
               "status": { "enum": ["succeeded", "failed", "cancelled"] },
               "spokenSummary": { "type": "string", "maxLength": 160 }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "method": { "const": "voice.speak" } } },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["text"],
+            "properties": {
+              "text": { "type": "string", "minLength": 1, "maxLength": 160 }
             }
           }
         }

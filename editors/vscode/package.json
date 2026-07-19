@@ -2,7 +2,7 @@
   "name": "chudvis-vscode",
   "displayName": "Chudvis",
   "description": "Wake-word voice navigation, explanations, and bounded code edits for VS Code.",
-  "version": "0.3.7",
+  "version": "0.3.10",
   "publisher": "chudvis",
   "license": "UNLICENSED",
   "repository": {
@@ -32,7 +32,9 @@
     "onView:chudvis.sidebar",
     "onCommand:chudvis.toggle",
     "onCommand:chudvis.startBridge",
-    "onCommand:chudvis.stopBridge"
+    "onCommand:chudvis.stopBridge",
+    "onCommand:chudvis.showDiagnostics",
+    "onCommand:chudvis.followDiagnostics"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -112,6 +114,14 @@
         "title": "Chudvis: Clear ElevenLabs API Key"
       },
       {
+        "command": "chudvis.configureElevenLabsVoice",
+        "title": "Chudvis: Choose ElevenLabs Feedback Voice"
+      },
+      {
+        "command": "chudvis.testElevenLabsVoice",
+        "title": "Chudvis: Test ElevenLabs Feedback Voice"
+      },
+      {
         "command": "chudvis.clearEditingMemory",
         "title": "Chudvis: Clear Editing Memory"
       },
@@ -122,6 +132,14 @@
       {
         "command": "chudvis.undo",
         "title": "Chudvis: Undo Last Edit"
+      },
+      {
+        "command": "chudvis.showDiagnostics",
+        "title": "Chudvis: Show Diagnostics"
+      },
+      {
+        "command": "chudvis.followDiagnostics",
+        "title": "Chudvis: Follow Diagnostics in Terminal"
       }
     ],
     "keybindings": [
@@ -213,6 +231,20 @@
           "maximum": 250000,
           "description": "Maximum combined original and replacement characters in one Chudvis edit."
         },
+        "chudvis.elevenLabs.ttsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "description": "Speak short action-completion summaries through ElevenLabs."
+        },
+        "chudvis.elevenLabs.voiceId": {
+          "type": "string",
+          "default": "21m00Tcm4TlvDq8ikWAM",
+          "minLength": 5,
+          "maxLength": 100,
+          "scope": "machine",
+          "description": "ElevenLabs voice ID used for spoken Chudvis feedback. Choose it from the Chudvis sidebar or enter an ID here."
+        },
         "chudvis.runtime.preview": {
           "type": "boolean",
           "default": false,
@@ -250,6 +282,11 @@
           "default": [],
           "scope": "machine",
           "description": "Additional direct arguments for calibrate, test, or IDE mode, such as --camera and 1."
+        },
+        "chudvis.diagnostics.includeModelPayloads": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include exact model prompts, source context, tool calls, and responses in local diagnostic logs. These payloads may contain sensitive workspace data. Credentials are always redacted."
         }
       }
     }

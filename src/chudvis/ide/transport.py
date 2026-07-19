@@ -65,8 +65,11 @@ class IdeTransport:
         params: Mapping[str, object] | None = None,
         *,
         continuous: bool = False,
+        low_priority: bool = False,
     ) -> bool:
         message = notification(method, params)
+        if low_priority and self._outbound.qsize() >= self._outbound.maxsize // 2:
+            return False
         try:
             self._outbound.put_nowait(message)
             return True
@@ -149,9 +152,7 @@ class IdeTransport:
                     raw_line, _, remainder = incoming.partition(b"\n")
                     incoming = bytearray(remainder)
                     if raw_line:
-                        self._queue_inbound(
-                            decode_message(bytes(raw_line), self.max_message_bytes)
-                        )
+                        self._queue_inbound(decode_message(bytes(raw_line), self.max_message_bytes))
 
     def _run(self) -> None:
         announced_waiting = False

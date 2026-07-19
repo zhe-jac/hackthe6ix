@@ -11,7 +11,12 @@ from chudvis.capture.camera import OpenCVCamera
 from chudvis.core.config import AppConfig
 from chudvis.core.events import GazeSample, GestureEvent, GestureType
 from chudvis.core.platform import get_screen_size
-from chudvis.gaze.model import AdaptiveGazeSmoother, CalibrationProfile, GazeEstimator
+from chudvis.gaze.model import (
+    AdaptiveGazeSmoother,
+    CalibrationProfile,
+    GazeConfidenceGate,
+    GazeEstimator,
+)
 from chudvis.gestures.engine import GestureEngine, GestureMetrics
 from chudvis.perception.mediapipe_tracker import MediaPipeTracker, PerceptionResult
 from chudvis.ui.window import close_window, window_is_open
@@ -62,6 +67,10 @@ class DiagnosticDashboard:
         self.profile = profile
         self.gestures = GestureEngine(config.gestures)
         self.gaze: GazeEstimator | None = None
+        self.gaze_gate = GazeConfidenceGate(
+            config.gaze.minimum_confidence,
+            config.gaze.max_sample_age_seconds,
+        )
         if profile is not None:
             smoother = AdaptiveGazeSmoother(
                 min_cutoff=config.gaze.smoothing_min_cutoff,
@@ -133,13 +142,15 @@ class DiagnosticDashboard:
         self.last_metrics = GestureEngine.measure(result.hand)
 
         if self.gaze is not None and result.gaze_features is not None:
-            self.last_gaze = self.gaze.estimate(
+            sample = self.gaze.estimate(
                 result.gaze_features,
                 result.gaze_confidence,
                 timestamp,
             )
-            self.gaze_frames += 1
-        elif (
+            if self.gaze_gate.accepts(sample):
+                self.last_gaze = sample
+                self.gaze_frames += 1
+        if (
             self.last_gaze
             and timestamp - self.last_gaze.timestamp > self.config.gaze.max_sample_age_seconds
         ):

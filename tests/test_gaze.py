@@ -4,9 +4,14 @@ import json
 
 import pytest
 
-from chudvis.core.events import GazeFeatures, Point
+from chudvis.core.events import GazeFeatures, GazeSample, Point
 from chudvis.gaze.features import FEATURE_COUNT
-from chudvis.gaze.model import KERNEL_MODEL, AdaptiveGazeSmoother, CalibrationProfile
+from chudvis.gaze.model import (
+    KERNEL_MODEL,
+    AdaptiveGazeSmoother,
+    CalibrationProfile,
+    GazeConfidenceGate,
+)
 from chudvis.gaze.training import TargetSamples, select_best_profile
 
 
@@ -65,6 +70,15 @@ def test_smoother_holds_fixation_jitter_but_reacts_to_a_large_step() -> None:
 
     assert jitter_span < 0.002
     assert stepped.x > 0.70
+
+
+def test_confidence_gate_tolerates_only_brief_minor_drops() -> None:
+    gate = GazeConfidenceGate(minimum_confidence=0.55, grace_seconds=0.30)
+
+    assert gate.accepts(GazeSample(Point(0.5, 0.5), 0.9, True, 1.0))
+    assert gate.accepts(GazeSample(Point(0.6, 0.5), 0.5, True, 1.2))
+    assert not gate.accepts(GazeSample(Point(0.7, 0.5), 0.2, True, 1.25))
+    assert not gate.accepts(GazeSample(Point(0.8, 0.5), 0.5, True, 1.31))
 
 
 def test_high_dimensional_ridge_fit_supports_fewer_samples_than_features() -> None:

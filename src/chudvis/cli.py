@@ -10,7 +10,13 @@ from pathlib import Path
 from chudvis import __version__
 from chudvis.actions.base import InputAdapter, RecordingInputAdapter
 from chudvis.core.config import AppConfig, default_config_dir
-from chudvis.core.platform import get_screen_size, inspect_platform, is_wsl, list_video_devices
+from chudvis.core.platform import (
+    configure_process_for_desktop_input,
+    get_screen_size,
+    inspect_platform,
+    is_wsl,
+    list_video_devices,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -358,12 +364,24 @@ def _ide(args: argparse.Namespace, config: AppConfig) -> int:
         )
     profile = CalibrationProfile.load(args.profile)
     config.camera_index = args.camera if args.camera is not None else config.camera_index
+    environment_host = os.environ.get("CHUDVIS_IDE_HOST")
+    environment_port = os.environ.get("CHUDVIS_IDE_PORT")
+    environment_token = os.environ.get("CHUDVIS_IDE_SESSION_TOKEN")
     if args.host is not None:
         config.ide.host = args.host
+    elif environment_host:
+        config.ide.host = environment_host
     if args.port is not None:
         config.ide.port = args.port
+    elif environment_port:
+        try:
+            config.ide.port = int(environment_port)
+        except ValueError as exc:
+            raise ValueError("CHUDVIS_IDE_PORT must be an integer") from exc
     if args.session_token is not None:
         config.ide.session_token = args.session_token
+    elif environment_token is not None:
+        config.ide.session_token = environment_token
 
     try:
         screen_size = get_screen_size()
@@ -440,6 +458,7 @@ def _ide(args: argparse.Namespace, config: AppConfig) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_process_for_desktop_input()
     args = _parser().parse_args(argv)
     try:
         config = AppConfig.load(args.config)

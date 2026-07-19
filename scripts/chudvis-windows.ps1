@@ -17,12 +17,13 @@ $pythonVersion = if ($env:CHUDVIS_WINDOWS_PYTHON) {
     "3.12"
 }
 
-$uv = Get-Command uv -ErrorAction SilentlyContinue
+$uvName = if ($env:CHUDVIS_UV) { $env:CHUDVIS_UV } else { "uv" }
+$uv = Get-Command $uvName -ErrorAction SilentlyContinue
 if (-not $uv) {
     Write-Error @"
 Windows uv is not installed. From PowerShell, install it once with:
   winget install --id astral-sh.uv -e
-Then rerun this launcher from WSL.
+Then reload VS Code or rerun this launcher.
 "@
 }
 

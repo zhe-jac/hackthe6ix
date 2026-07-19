@@ -4,226 +4,392 @@
 
 # Chudvis
 
-Chudvis is a multimodal control prototype that uses webcam gaze estimation to position the
-pointer, hand gestures to act, and voice for text and coding requests. It supports both raw desktop
-control and Chudvis IDE mode, a semantic two-hand VS Code voice assistant. Desktop dictation stays
-offline; Chudvis detects its wake word locally, then uses configured cloud services for activated
-requests.
+Chudvis is a hands-free control system for VS Code and the desktop. It uses a webcam to estimate
+gaze, recognizes deliberate hand gestures, and accepts voice requests after the local “Chudvis”
+wake word.
 
-The current MVP intentionally uses raw operating-system mouse and keyboard events. It can
-therefore work outside a browser, but it does not yet understand whether a screen coordinate
-contains a button or text field. IDE mode adds a local VS Code extension that understands files,
-review changes, editor scrolling, selections, and coding-agent requests.
+The VS Code extension is the primary experience. It owns the complete IDE lifecycle: it starts and
+stops the packaged native Python runtime, manages the loopback bridge, turns gaze and gestures into
+editor-aware actions, routes voice requests, validates proposed edits, and presents review and Undo
+inside VS Code.
 
-## Implemented controls
+> [!IMPORTANT]
+> Installing or opening the extension does not start the camera, microphone, or controls. Start and
+> stop Chudvis explicitly with `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS), the sidebar button, the status-bar
+> item, or a Command Palette command. An installed extension does not require a separate
+> `uv run chudvis ide` terminal.
 
-| Input | Action |
-|---|---|
-| Gaze | Move the desktop pointer |
-| Quick thumb/index pinch | Click at the gaze position captured when the pinch began |
-| Pinch and hold | Start a drag; move the hand to drag and release to drop |
-| Open palm moved vertically | Scroll |
-| Open palm held still | Pause or resume all actions |
-| Thumbs-up held | Start dictation; repeat to transcribe, type, and press Enter |
+## Modes
 
-Press `Esc` in the optional preview window, or `Ctrl+C` in the terminal, for an emergency stop.
+| Mode                 | Purpose                                                                                       | How it starts                                      |
+| -------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| VS Code IDE mode     | Gaze selection, two-hand editor gestures, voice navigation, questions, and guarded code edits | Started and supervised by the extension            |
+| Tracking diagnostics | Safely inspect gaze, both hands, gesture thresholds, and calibration quality without OS input | **Test Tracking** in the sidebar or `chudvis test` |
+| Desktop mode         | Raw gaze-controlled pointer, click, drag, scroll, pause, and local dictation outside VS Code  | Standalone `chudvis run` command                   |
 
-### IDE controls
+## VS Code quick start
 
-| Input | IDE action |
-|---|---|
-| Gaze | Move the pointer toward a code target |
-| Editor-hand quick pinch | Click the locked gaze target and select its enclosing symbol |
-| Editor-hand open-palm movement | Scroll within the active editor |
-| Navigator-hand open-palm movement | Move to the previous or next captured change |
-| Say “Chudvis,” then speak | Start one realtime navigation, question, or code-edit request |
-| Editor-hand thumbs-up | Approve an expanded edit, or use local Whisper when wake streaming is unavailable |
-| Open palm held while a request is pending | Cancel the request |
-| Open palm held otherwise | Pause or resume IDE control |
+### 1. Install the extension
 
-Hand roles are configurable and default to the user's physical left hand for navigation and
-physical right hand for editing. The labels do not refer to which side of the mirrored preview a
-hand appears on; Chudvis normalizes the detector's mirrored-view labels before assigning roles.
+Requirements for an installation from source:
 
-## Setup
+- VS Code 1.95 or newer, with its `code` CLI on `PATH`
+- Node.js and npm to build the extension
+- [`uv`](https://docs.astral.sh/uv/) available on the native host that owns the camera and VS Code UI
+- A webcam; a microphone is needed only for voice
 
-Python 3.10 through 3.12 is supported.
+From WSL, Linux, or macOS, build, test, package, and install the extension with:
+
+```bash
+./scripts/install-vscode-extension.sh
+```
+
+On native Windows, run:
+
+```powershell
+Set-Location editors\vscode
+npm ci
+npm run verify
+npm run package
+Set-Location ..\..
+powershell -ExecutionPolicy Bypass -File .\scripts\install-vscode-extension.ps1
+```
+
+Then run **Developer: Reload Window** in VS Code.
+
+For a Windows or Remote WSL VS Code window, install Windows `uv` once if it is not already
+available:
+
+```powershell
+winget install --id astral-sh.uv -e
+```
+
+Restart VS Code after changing the Windows `PATH`. On its first native launch, Chudvis creates an
+isolated environment under `%LOCALAPPDATA%\Chudvis\windows-venv` and downloads the required Python
+and model assets. The repository's WSL or Linux `.venv` is not used by the extension.
+
+### 2. Configure voice services
+
+Gaze and hand controls do not require cloud credentials. For the complete voice workflow:
+
+1. Set `ELEVENLABS_API_KEY` in the environment that launches VS Code.
+2. Run **Chudvis: Configure Backboard API Key** from the Command Palette.
+3. Restart VS Code after adding or changing the ElevenLabs environment variable.
+
+On Windows, a persistent user variable can be set with:
+
+```powershell
+[Environment]::SetEnvironmentVariable("ELEVENLABS_API_KEY", "your-key", "User")
+```
+
+The first time live controls start, the extension shows a disclosure describing what is processed
+locally and what is sent to ElevenLabs and Backboard. Declining leaves Chudvis stopped. If wake-word
+streaming is unavailable but the local speech dependencies work, editor-hand thumbs-up remains
+available as the confirmed local Whisper fallback.
+
+### 3. Calibrate gaze
+
+Open the Chudvis icon in the left Activity Bar and choose **Recalibrate Gaze**. Keep the same seating
+position, display scaling, camera placement, and lighting that you will use during control. Keep
+your head reasonably still and look at each target with your eyes.
+
+Calibration uses a dense 5x5 target grid, balanced samples, outlier and blink rejection, followed by
+a separate validation pass. Chudvis records median and p95 validation error and warns before live
+control when the saved profile is poor.
+
+Calibration is stored for the native runtime. In a Windows/WSL setup, calibrating with plain Linux
+`uv run` creates the wrong platform profile; use the extension's button so calibration and live
+control share the Windows screen geometry and DPI awareness.
+
+### 4. Test tracking safely
+
+Choose **Test Tracking** in the sidebar before enabling live input. Diagnostics uses the same
+two-hand tracker, gaze estimator, smoothing, and confidence gate as IDE mode, but never emits mouse
+or keyboard actions. Close the diagnostics window when finished.
+
+The dashboard shows:
+
+- Face, iris, and complete hand landmarks
+- Physical left/right hand labels and IDE editor/navigator roles
+- Gaze readiness, confidence, blink state, and eye openness
+- Pinch, open-palm, and thumbs-up recognition
+- Gesture arming, hold progress, cancellations, and completed events
+- Loaded calibration model and held-out median/p95 error
+- The current calibrated gaze position on a mini screen and full dashboard
+
+Press `G` to toggle the full-dashboard gaze reticle and `Esc` to close diagnostics.
+
+The dashboard reticle is a visualization, so it can look steadier than a real OS pointer. Live IDE
+mode also runs both-hand tracking and voice processing at the same time. Large live-vs-dashboard
+differences usually indicate a weak or mismatched calibration, changed camera/head position,
+different Windows display scaling, low light, or an incorrect camera. Recalibrate from the
+extension under the conditions in which Chudvis will be used.
+
+### 5. Start and stop Chudvis
+
+Use any of these equivalent controls:
+
+- Press `Ctrl+Alt+G` on Windows/Linux or `Cmd+Alt+G` on macOS.
+- Click **Start Controls** or **Stop Controls** in the Chudvis sidebar.
+- Click the Chudvis status-bar item.
+- Run **Chudvis: Toggle Controls** from the Command Palette.
+
+The status bar and sidebar show **Off** when controls are stopped. Stopping Chudvis terminates its
+native gaze, gesture, and voice process. Calibration and diagnostics are also explicit actions and
+never enable live controls automatically.
+
+## Chudvis sidebar
+
+The left sidebar is both the quick-start surface and the request/review interface. It includes:
+
+- Synchronized **Start/Stop Controls**, **Test Tracking**, and **Recalibrate Gaze** buttons
+- A visible guide that labels every action as no-hand, editor-hand, navigator-hand, or either-hand
+- Live voice state and partial transcription
+- The current request, resolved source target, and streamed answer
+- Apply, Cancel, Open Changes, guarded Undo, and Clear Memory actions
+- A bounded session history
+
+The same actions are available from the Command Palette:
+
+| Command                                                                   | Purpose                                                       |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Chudvis: Toggle Controls**                                              | Start or stop the complete live-control runtime               |
+| **Chudvis: Start Gaze, Gesture, and Voice Controls**                      | Explicitly start live controls                                |
+| **Chudvis: Stop Gaze, Gesture, and Voice Controls**                       | Stop live controls and the native process                     |
+| **Chudvis: Calibrate Gaze**                                               | Replace the native gaze calibration profile                   |
+| **Chudvis: Test Tracking Safely**                                         | Open diagnostics without OS actions                           |
+| **Chudvis: Cancel Pending Action**                                        | Cancel active selection, request, or edit work                |
+| **Chudvis: Open Changes**                                                 | Reopen the current native diff or applied change              |
+| **Chudvis: Undo Last Edit**                                               | Run guarded Undo when the applied snapshots still match       |
+| **Chudvis: Next Captured Change** / **Chudvis: Previous Captured Change** | Navigate captured files and change ranges                     |
+| **Chudvis: Configure Backboard API Key**                                  | Store and validate the Backboard key in VS Code SecretStorage |
+| **Chudvis: Clear Backboard API Key**                                      | Remove the key from VS Code SecretStorage                     |
+| **Chudvis: Clear Editing Memory**                                         | Delete the workspace editing thread and its saved IDs         |
+
+The bridge-only Start/Stop commands are troubleshooting tools. **Start IDE Bridge** does not start
+the camera or controls and is not part of the normal workflow.
+
+## IDE controls
+
+Hand roles default to the user's physical right hand for editing and physical left hand for
+navigation. They are independent of the side on which a hand appears in the mirrored camera image.
+Chudvis normalizes the detector labels before assigning roles.
+
+| Input                                                | IDE action                                                                      |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Gaze                                                 | Move the OS pointer toward a code target                                        |
+| Editor-hand quick thumb/index pinch                  | Click the gaze position captured at pinch start and select the enclosing symbol |
+| Editor-hand open palm moved vertically               | Scroll the active editor or diff                                                |
+| Navigator-hand open palm moved vertically            | Move to the previous or next captured change                                    |
+| Say “Chudvis,” then speak                            | Start one navigation, question, or explicit code-edit request                   |
+| Editor-hand thumbs-up held                           | Approve an expanded edit, or start/confirm local Whisper fallback               |
+| Either-hand open palm held while a request is active | Cancel the request                                                              |
+| Either-hand open palm held otherwise                 | Pause or resume IDE control                                                     |
+
+VS Code cannot map arbitrary desktop coordinates directly to a document position. Chudvis therefore
+locks the latest fresh gaze sample when the editor-hand pinch begins, clicks that point when the
+pinch is released, and accepts only the resulting selection during a short armed window. It then
+selects the smallest enclosing document symbol, or the current line when symbols are unavailable.
+
+### Voice requests
+
+Each realtime request requires a fresh wake word. Examples include:
+
+```text
+Chudvis, open the configuration file
+Chudvis, go to the startControls symbol
+Chudvis, explain what this function does
+Chudvis, rename this parameter to sessionToken
+Chudvis, cancel
+```
+
+File and symbol navigation, references, Undo, and Cancel are handled locally. Questions stream from
+Backboard into the sidebar using a temporary memory-free thread. Explicit edit requests use a
+persistent workspace editing thread and exact-text operations.
+
+Edits wholly inside the resolved selection or symbol can auto-apply. Any scope expansion opens a
+native VS Code diff and waits for **Apply** or an editor-hand thumbs-up. Cancel or an open palm rejects
+the proposal. Applied edits receive a guarded Undo that refuses to overwrite later document changes.
+
+## Extension lifecycle and the local bridge
+
+The extension and the Python runtime have separate responsibilities:
+
+```text
+webcam + microphone
+        |
+        v
+native Chudvis runtime
+  gaze + two-hand gesture recognition
+  local wake-word detection
+  ElevenLabs realtime speech when activated
+        |
+        | authenticated JSON-RPC over loopback
+        v
+VS Code extension
+  semantic selection + editor navigation
+  request routing + Backboard
+  edit validation + native diff + Undo
+  sidebar + status + lifecycle controls
+```
+
+The extension starts the loopback bridge and passes its actual private connection settings directly
+to the supervised runtime. It prefers `127.0.0.1:8765`. If another VS Code window already owns that
+port, an explicitly started second window automatically uses an ephemeral loopback port instead of
+requiring the user to kill another process.
+
+In Remote WSL, the extension runs in the Windows/UI extension host and launches the packaged runtime
+through Windows PowerShell. Plain `uv run chudvis ide` inside WSL uses Linux camera and input APIs;
+those events cannot control native Windows VS Code. This native-host boundary is why the extension
+owns IDE startup instead of asking the user to run a separate script.
+
+## Standalone desktop mode
+
+Standalone mode is useful for raw desktop control, diagnostics development, and platforms where the
+native Python process is launched directly. Python 3.10 through 3.12 is supported.
 
 ```bash
 uv sync --extra voice --extra dev
 uv run chudvis doctor
 uv run chudvis calibrate
+uv run chudvis test
 uv run chudvis run
 ```
 
-Voice support downloads the configured Whisper fallback and the pinned Apache-2.0 Sherpa ONNX
-keyword model the first time each is used. The wake-model archive and runtime assets are verified
-against pinned SHA-256 checksums. To omit the larger speech dependencies:
+To omit speech dependencies:
 
 ```bash
 uv sync --extra dev
 uv run chudvis run --no-voice
 ```
 
-MediaPipe face and hand model assets are also downloaded into the user cache on first use. An
-optional tuning template is provided in `config.example.json`; pass a copied file with
-`--config /path/to/config.json`.
-
-Gaze calibration uses a dense 5x5 target grid, balanced per-target samples, robust outlier and
-blink rejection, and a separate nine-target validation pass. It compares regularized linear and
-nonlinear gaze mappings and saves the simpler model unless the nonlinear mapping produces a
-meaningful validation improvement. Runtime motion is stabilized with time-aware low-lag
-filtering. Calibration profiles are model versioned; rerun `chudvis calibrate` when prompted.
-
-On Linux, raw input libraries normally require an X11 session. Wayland compositors may block
-synthetic global input. Start with `--dry-run --preview` if you are unsure:
+Start with dry-run mode if global input support is uncertain:
 
 ```bash
 uv run chudvis run --dry-run --preview
 ```
 
-## VS Code IDE mode
+Linux raw input generally requires an X11 session. Wayland compositors may deny synthetic global
+input. Press `Esc` in the optional preview window or `Ctrl+C` in the terminal for an emergency stop.
 
-Build, test, package, and install the included extension:
+### Desktop controls
 
-```bash
-./scripts/install-vscode-extension.sh
-```
+| Input                      | Desktop action                                               |
+| -------------------------- | ------------------------------------------------------------ |
+| Gaze                       | Move the desktop pointer                                     |
+| Quick thumb/index pinch    | Click the gaze position captured when the pinch began        |
+| Pinch and hold             | Start a drag; move the hand to drag and release to drop      |
+| Open palm moved vertically | Scroll                                                       |
+| Open palm held still       | Pause or resume all actions                                  |
+| Thumbs-up held             | Start dictation; repeat to transcribe, type, and press Enter |
 
-When run from WSL, the installer deliberately uses the Windows VS Code CLI. Running
-`code --install-extension` directly inside a WSL terminal targets the remote extension host and
-will reject this UI-side extension. Reload the VS Code window after installation.
+### Windows-native launcher from WSL
 
-Open the target workspace in VS Code, calibrate Chudvis if needed, and then run:
-
-```bash
-uv sync --extra voice --extra dev
-uv run chudvis test --ide
-uv run chudvis ide --preview
-```
-
-Before starting IDE mode, expose an ElevenLabs key to the Python process and configure Backboard
-from **Chudvis: Configure Backboard API Key** in the VS Code Command Palette. The Backboard key is
-stored only in VS Code SecretStorage.
-
-```bash
-export ELEVENLABS_API_KEY="..."
-```
-
-For Windows-native execution, define `ELEVENLABS_API_KEY` in the Windows environment (or launch
-from a PowerShell session where it is set). If the ElevenLabs key, wake dependencies, or microphone
-are unavailable, IDE mode retains the confirmed thumbs-up/local-Whisper request flow.
-
-From WSL, run the same flow through Windows-native Python so the webcam, pointer, extension bridge,
-and VS Code UI share the Windows host:
-
-```bash
-./scripts/chudvis-windows.sh doctor --ide --skip-camera
-./scripts/chudvis-windows.sh test --ide
-./scripts/chudvis-windows.sh ide --preview
-```
-
-The extension starts its bridge on `127.0.0.1:8765`; the Python process reconnects automatically.
-For a shared secret, set the same non-empty value in `ide.session_token` in the Chudvis JSON
-configuration and `chudvis.bridge.sessionToken` in VS Code settings.
-
-Chudvis handles file/symbol navigation locally. Questions stream from Backboard into the sidebar
-without memory or speech. Explicit code edits use exact-text proposals and auto-apply only inside
-the resolved selection/symbol; any scope expansion opens a native diff and waits for Apply or a
-thumbs-up. Successful edits get a guarded Undo and one short ElevenLabs spoken summary. The old VS
-Code CLI agent can be selected explicitly as `chudvis.provider = legacy-vscode-cli` for confirmed
-local-Whisper fallback requests; it is not the default.
-
-See [docs/ide-mode.md](docs/ide-mode.md) for architecture, state transitions, configuration, and
-failure behavior.
-
-### Run the Windows-native app from WSL
-
-WSLg can display Linux windows but Linux `pynput` events do not control native Windows apps.
-From WSL, use the included launcher to run the same source tree with Windows-native Python:
+For standalone desktop development from a WSL checkout, use the included launcher:
 
 ```bash
 ./scripts/chudvis-windows.sh doctor --skip-camera
 ./scripts/chudvis-windows.sh calibrate --camera 0
+./scripts/chudvis-windows.sh test --ide --camera 0
 ./scripts/chudvis-windows.sh run --preview --no-voice
-./scripts/chudvis-windows.sh ide --preview
 ```
 
-The launcher forwards any additional Chudvis arguments. It uses Windows `uv`, Python 3.12,
-and a separate virtual environment under `%LOCALAPPDATA%\Chudvis`, so the Linux `.venv` is
-left untouched. If Windows `uv` is missing, install it once from PowerShell with
-`winget install --id astral-sh.uv -e`.
+It forwards additional arguments, uses Windows `uv` and Python 3.12, and shares the isolated
+environment under `%LOCALAPPDATA%\Chudvis`. This launcher is not needed for installed IDE mode.
 
-## Commands
+## CLI reference
 
 ```text
-chudvis doctor [--ide]               Check runtime hardware and optionally the VS Code bridge
-chudvis calibrate [--grid-size 5|7]  Run dense gaze calibration and validation
-chudvis test [--camera 0]            Safely inspect tracking, gaze, and gesture triggers
-chudvis run [--preview] [--dry-run]  Start desktop control
-chudvis ide [--preview] [--dry-run]  Start semantic two-hand VS Code control
+chudvis doctor [--camera N] [--skip-camera] [--ide]
+chudvis calibrate [--camera N] [--profile PATH] [--grid-size 5|7]
+chudvis test [--camera N] [--profile PATH] [--ide]
+chudvis run [--camera N] [--profile PATH] [--preview] [--dry-run] [--no-voice]
+chudvis ide [--camera N] [--profile PATH] [--preview] [--dry-run] [--no-voice]
+            [--host HOST] [--port PORT] [--session-token TOKEN]
 ```
 
-## Tracking diagnostics
+Use `chudvis --config PATH <command>` to load a custom JSON configuration. Copy
+[`config.example.json`](config.example.json) as a starting point. The default configuration and
+calibration paths are:
 
-Run diagnostics before calibration or whenever gestures feel unreliable:
-
-```bash
-uv run chudvis test
+```text
+~/.config/chudvis/config.json
+~/.config/chudvis/calibration.json
 ```
 
-This mode never emits operating-system mouse or keyboard actions. Its dashboard shows:
+For the native Windows extension runtime, `~` is the Windows user profile. Useful VS Code settings
+include:
 
-- Live camera with eye/iris landmarks and the complete hand skeleton
-- Whether the face and hand models are producing landmarks
-- Head-normalized gaze readiness, feature count, blink state, and eye openness
-- Pinch ratio and its configured activation threshold
-- Open-palm and thumbs-up classifier results
-- Recent click, drag, scroll, pause, and dictation gesture events
-- Loaded calibration metadata
-- Calibration model and held-out median/p95 error
-- A mini screen containing the current calibrated gaze position
-- A full-dashboard gaze reticle, enabled by default and toggled with `G`
-- Practice cards with live hold progress and persistent completion markers for every gesture
+| Setting                          | Purpose                                                        |
+| -------------------------------- | -------------------------------------------------------------- |
+| `chudvis.runtime.preview`        | Show a compact camera preview during live IDE control          |
+| `chudvis.runtime.voice`          | Enable wake-word voice and local Whisper fallback              |
+| `chudvis.runtime.uvExecutable`   | Native `uv` executable name or absolute path                   |
+| `chudvis.runtime.pythonVersion`  | Python version used for the isolated runtime; defaults to 3.12 |
+| `chudvis.runtime.extraArguments` | Extra CLI arguments, for example `["--camera", "1"]`           |
+| `chudvis.bridge.host` / `port`   | Preferred local bridge address                                 |
+| `chudvis.bridge.sessionToken`    | Optional shared loopback authentication token                  |
 
-The camera panel preserves a 1280x720 source at native size on a 1920x1080 or larger display.
-Unconfirmed hand candidates are drawn in gray and labeled with confirmation progress; only an
-orange `ACTION READY` skeleton is sent to the gesture engine. Pinch arming and cancellation are
-labeled as phases rather than actions.
+`chudvis.runtime.sourceRoot` is a development override. Leave it empty to use the runtime packaged
+inside the extension.
 
-It also prints completed gesture events to the terminal. The gaze screen is disabled when no
-calibration exists, but camera and hand diagnostics continue to work.
+## Privacy and safety
 
-Scrolling requires a confirmed open palm for a short arming period followed by accumulated,
-directionally consistent movement. Small landmark jitter is discarded and scroll events are
-rate-limited. Very short one-frame pinches are cancelled rather than clicked. Active drags
-survive brief hand-tracking flicker; uncommitted pinches use a shorter grace window and releases
-that occur while the hand is missing are cancelled instead of clicked. Pause and dictation hold
-timers restart after tracking loss.
+- Camera frames are processed locally and are not persisted or sent to cloud services.
+- Before the wake word, microphone audio is consumed only by the local Sherpa ONNX detector.
+- After wake activation, microphone audio is sent to ElevenLabs for realtime transcription.
+- The extension sends only bounded, resolved source context to Backboard for questions and edits.
+- Backboard receives no shell or terminal tool and cannot create, delete, or rename files directly.
+- Questions use temporary threads with memory disabled; the workspace editing thread can be cleared
+  from the sidebar or Command Palette.
+- Calibration profiles contain feature statistics, model coefficients, validation metrics, and
+  screen/camera metadata—not camera images or microphone recordings.
+- The bridge accepts only loopback connections, validates a hello handshake and message bounds, and
+  supports an optional shared secret.
 
-Calibration profiles contain only feature normalization statistics, regression coefficients, and
-screen/camera metadata. Camera frames and microphone recordings are never persisted by default.
+## Troubleshooting
 
-The head-normalized gaze feature selection and pose normalization are adapted from
-[EyeTrax](https://github.com/ck-zhang/EyeTrax) under its MIT license; the license notice is shipped
-with the gaze module.
+| Symptom                                                | What to do                                                                                                                                                                          |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Extension is installed but nothing starts              | This is expected. Reload VS Code, open the Chudvis sidebar, then click **Start Controls** or press `Ctrl+Alt+G`.                                                                    |
+| `uv` cannot be found or the runtime fails immediately  | Install native-host `uv`, restart VS Code, or set `chudvis.runtime.uvExecutable` to its absolute path. Do not point Windows VS Code at WSL `uv`.                                    |
+| `EADDRINUSE` on `127.0.0.1:8765`                       | Update/reload the extension and stop any separately launched `chudvis ide` process. Current explicit startup chooses a private port when another VS Code window owns 8765.          |
+| Tracking is shaky or does not match diagnostics        | Recalibrate from the extension, keep camera/head/display geometry unchanged, check median/p95 error in **Test Tracking**, improve frontal lighting, and verify the selected camera. |
+| Calibration exists in WSL but the extension asks again | The Linux and Windows profiles are separate. Run **Recalibrate Gaze** from the extension to create the native Windows profile.                                                      |
+| Webcam works in Windows but not plain WSL Python       | Use the extension or `scripts/chudvis-windows.sh`; WSL usually has no native Windows webcam device or global Windows input access.                                                  |
+| Voice never activates                                  | Set `ELEVENLABS_API_KEY` in the VS Code host environment, restart VS Code, configure the Backboard key, and check the Chudvis output channel.                                       |
+| The shortcut conflicts with another application        | Click the sidebar/status-bar toggle, run **Chudvis: Toggle Controls**, or change the keybinding in VS Code.                                                                         |
 
 ## Development
 
+Run the full checks from the repository root:
+
 ```bash
+uv sync --extra voice --extra dev
 uv run pytest
 uv run ruff check .
 uv run mypy
-cd editors/vscode && npm run verify
+
+cd editors/vscode
+npm ci
+npm run verify
+npm run package
 ```
 
-The core is structured around typed events and replaceable adapters. The VS Code integration uses
-an independent IDE controller and adapter so the desktop controller remains backward compatible.
-Future editor, browser DOM, and native accessibility integrations can reuse the same perception
-and gesture recognition layers.
+Python tests use recording input adapters, synthetic landmarks, and fake audio and transport
+implementations. Extension tests cover routing, proposal and path validation, bridge authentication,
+runtime launch planning, SSE parsing, and protocol rejection without requiring a camera or VS Code.
 
-## Current boundary
+See [docs/ide-mode.md](docs/ide-mode.md) for the detailed request state machine, provider and edit
+boundaries, bridge protocol, and failure behavior.
 
-Desktop mode intentionally does not inspect the control under the pointer. IDE mode understands
-text editors and document symbols, but still uses the gaze-controlled OS pointer for the initial
-screen-to-document hit because VS Code does not expose arbitrary desktop-coordinate hit testing.
+## Current boundaries and attribution
+
+Desktop mode emits raw OS mouse and keyboard actions and does not understand the control beneath the
+pointer. IDE mode understands files, text selections, and document symbols, but the initial
+screen-to-document hit still uses the gaze-controlled OS pointer because VS Code does not expose
+arbitrary desktop-coordinate hit testing.
+
+Head-normalized gaze feature selection and pose normalization are adapted from
+[EyeTrax](https://github.com/ck-zhang/EyeTrax) under its MIT license; the notice is shipped with the
+gaze module.

@@ -100,3 +100,22 @@ def test_dashboard_estimates_gaze_when_profile_is_loaded() -> None:
 
     assert dashboard._gaze_canvas_point() == (380, 760)
     assert dashboard.toggle_gaze_overlay() is False
+
+
+def test_dashboard_uses_live_control_confidence_gate() -> None:
+    profile = CalibrationProfile(
+        weights_x=[0.0] * 9 + [0.25],
+        weights_y=[0.0] * 9 + [0.75],
+        feature_means=[0.0] * 9,
+        feature_scales=[1.0] * 9,
+        feature_count=9,
+        screen_width=1920,
+        screen_height=1080,
+        camera_index=0,
+        created_at="2026-07-18T00:00:00+00:00",
+    )
+    dashboard = DiagnosticDashboard(AppConfig(), profile)
+
+    dashboard.update(PerceptionResult(GazeFeatures((0.0,) * 9), 0.4, None, None), 1.0)
+
+    assert dashboard.last_gaze is None

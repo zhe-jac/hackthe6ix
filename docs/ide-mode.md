@@ -1,10 +1,17 @@
 # Chudvis IDE mode
 
-IDE mode separates physical perception from editor semantics. The Python runtime owns the camera,
-gaze calibration, hand identity, gesture state machines, one microphone stream, local “Chudvis”
-detection, ElevenLabs realtime speech I/O, and the local Whisper fallback. The VS Code extension
-owns document state, deterministic command routing, Backboard requests, bounded edit validation,
-native diffs, Undo, and the Chudvis sidebar.
+IDE mode separates physical perception from editor semantics. The extension launches and supervises
+the packaged native Python runtime, which owns the camera, gaze calibration, hand identity, gesture
+state machines, one microphone stream, local “Chudvis” detection, ElevenLabs realtime speech I/O,
+and the local Whisper fallback. The VS Code extension owns document state, deterministic command
+routing, Backboard requests, bounded edit validation, native diffs, Undo, and the Chudvis sidebar.
+
+Extension activation is passive: it registers the UI and commands but does not start the bridge,
+camera, microphone, or Python runtime. `Ctrl+Alt+G` on Windows/Linux (`Cmd+Alt+G` on macOS), the
+sidebar **Start/Stop Controls** button, the clickable status item, and **Chudvis: Toggle Controls**
+all control the same supervised IDE process. Calibration and tracking diagnostics are separate,
+explicit modes and do not leave live controls running. The sidebar also exposes **Test Tracking**,
+**Recalibrate Gaze**, and a persistent action guide.
 
 ```text
 camera + one microphone stream
@@ -54,9 +61,10 @@ roles, and use `chudvis test --ide` to confirm the labels before enabling action
 
 ## Cloud setup and disclosure
 
-Install the voice extra, set `ELEVENLABS_API_KEY` for the Python process, and run **Chudvis:
-Configure Backboard API Key** in VS Code. On first bridge start, the extension presents a native
-modal disclosure that post-activation audio goes to ElevenLabs and resolved source/context goes to
+The packaged extension runtime installs the voice extra in its isolated environment. Set
+`ELEVENLABS_API_KEY` for the native process that launches VS Code, and run **Chudvis: Configure
+Backboard API Key** in VS Code. On first bridge start, the extension presents a native modal
+disclosure that post-activation audio goes to ElevenLabs and resolved source/context goes to
 Backboard. Declining leaves the bridge stopped. Backboard credentials stay in SecretStorage; the
 ElevenLabs credential is read from the environment name configured by
 `voice.elevenlabs_api_key_env`.
@@ -166,6 +174,11 @@ Malformed messages or an invalid token close the connection. The Python transpor
 queue, does not block the camera loop, reconnects automatically, and discards queued commands when
 an editor connection is lost so stale gestures cannot execute later.
 
+The preferred address is `127.0.0.1:8765`. Passive activation does not attempt to bind it. On an
+explicit Start, the extension falls back to a private ephemeral loopback port when necessary and
+passes that actual port and session token directly to its runtime process. Multiple VS Code windows
+therefore do not require independently edited config files or a manually chosen port.
+
 The protocol envelope is defined in `protocol/ide-v1.schema.json`. Current Python-to-extension
 methods are:
 
@@ -183,13 +196,14 @@ IDs, string lengths, array counts, and total message size, ignore stale request 
 completion/cancellation idempotent.
 
 In a Remote WSL window, install with `./scripts/install-vscode-extension.sh`. The extension runs in
-the Windows/UI host so its loopback bridge matches the Windows-native camera and pointer runtime.
+the Windows/UI host, launches its packaged runtime through `chudvis-windows.ps1`, and keeps the
+loopback bridge on the same host as the Windows-native camera and pointer runtime.
 WSL workspace URIs are translated to `\\wsl.localhost\<distribution>\...` only when passing selected
 file context to the Windows VS Code CLI; shell command strings are never constructed.
 
-Run IDE mode from WSL through `./scripts/chudvis-windows.sh ide --preview`, not through the Linux
-virtual environment. Linux `pynput` cannot place the pointer in the native Windows editor, and the
-Windows launcher keeps the camera runtime on the same host as the extension bridge.
+Do not run IDE mode with plain `uv run` in WSL. Linux `pynput` cannot place the pointer in the native
+Windows editor. Use the extension's Start, Stop, Calibrate, and Test Tracking commands; the standalone
+Windows launcher remains available for desktop-mode development and troubleshooting.
 
 ## Development checks
 

@@ -1,8 +1,11 @@
 src/**
+scripts/**
 test/**
 tsconfig.json
 eslint.config.mjs
 **/*.map
+**/__pycache__/**
+**/*.pyc
 dist/test/**
 node_modules/@types/**
 node_modules/typescript/**

@@ -8,12 +8,13 @@ export class StatusPresenter implements vscode.Disposable {
     50,
   );
   private bridgeConnected = false;
-  private detail = "Starting bridge";
+  private controlsRunning = false;
+  private detail = "Use Toggle Controls or click here to start Chudvis";
   private paused = false;
   private voiceState: VoiceState | undefined;
 
   public constructor() {
-    this.item.command = "chudvis.startBridge";
+    this.item.command = "chudvis.toggle";
     this.item.name = "Chudvis";
     this.item.show();
     this.render();
@@ -27,6 +28,15 @@ export class StatusPresenter implements vscode.Disposable {
 
   public setPaused(paused: boolean): void {
     this.paused = paused;
+    this.render();
+  }
+
+  public setControls(running: boolean): void {
+    this.controlsRunning = running;
+    if (!running) {
+      this.paused = false;
+      this.voiceState = undefined;
+    }
     this.render();
   }
 
@@ -57,15 +67,17 @@ export class StatusPresenter implements vscode.Disposable {
       error: "Error",
       paused: "Paused",
     };
-    const mode = this.paused
-      ? "Paused"
-      : this.voiceState === undefined
-        ? this.bridgeConnected
-          ? "Ready"
-          : "Waiting"
-        : voiceLabels[this.voiceState];
+    const mode = !this.controlsRunning
+      ? "Off"
+      : this.paused
+        ? "Paused"
+        : this.voiceState === undefined
+          ? this.bridgeConnected
+            ? "Ready"
+            : "Waiting"
+          : voiceLabels[this.voiceState];
     this.item.text = `${connection} Chudvis: ${mode}`;
-    this.item.tooltip = this.detail;
+    this.item.tooltip = `${this.detail}\n\nClick to ${this.controlsRunning ? "stop" : "start"} Chudvis controls.`;
     this.item.backgroundColor =
       this.voiceState === "error"
         ? new vscode.ThemeColor("statusBarItem.errorBackground")

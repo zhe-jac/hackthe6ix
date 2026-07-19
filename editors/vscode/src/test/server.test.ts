@@ -79,3 +79,36 @@ void test("bridge rejects an invalid session token", async (context) => {
   assert.match(data.toString("utf8"), /session token does not match/u);
   await closed;
 });
+
+void test("bridge releases failed state after an address collision", async (context) => {
+  const first = new BridgeServer(
+    {
+      host: "127.0.0.1",
+      port: 0,
+      sessionToken: "",
+      maxMessageBytes: 4096,
+    },
+    () => undefined,
+    () => undefined,
+  );
+  const occupiedPort = await first.start();
+  const second = new BridgeServer(
+    {
+      host: "127.0.0.1",
+      port: occupiedPort,
+      sessionToken: "",
+      maxMessageBytes: 4096,
+    },
+    () => undefined,
+    () => undefined,
+  );
+  context.after(async () => {
+    await second.stop();
+    await first.stop();
+  });
+
+  await assert.rejects(second.start(), { code: "EADDRINUSE" });
+  await first.stop();
+
+  assert.equal(await second.start(), occupiedPort);
+});

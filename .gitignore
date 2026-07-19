@@ -13,3 +13,5 @@ models/*.bin
 models/*.pt
 models/*.task
 data/
+.mypy_cache/
+editors/vscode/runtime/

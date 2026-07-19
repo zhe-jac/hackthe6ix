@@ -53,21 +53,27 @@ export class BridgeServer {
       return this.addressPort();
     }
     this.server = net.createServer((socket) => this.accept(socket));
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const server = this.server;
+        if (server === undefined) {
+          reject(new Error("Bridge server was not created"));
+          return;
+        }
+        const onError = (error: Error): void => reject(error);
+        server.once("error", onError);
+        server.listen(this.options.port, this.options.host, () => {
+          server.off("error", onError);
+          resolve();
+        });
+      });
+    } catch (error: unknown) {
+      this.server.removeAllListeners();
+      this.server = undefined;
+      throw error;
+    }
     this.server.on("error", (error) => {
       this.onState(false, `Bridge error: ${error.message}`);
-    });
-    await new Promise<void>((resolve, reject) => {
-      const server = this.server;
-      if (server === undefined) {
-        reject(new Error("Bridge server was not created"));
-        return;
-      }
-      const onError = (error: Error): void => reject(error);
-      server.once("error", onError);
-      server.listen(this.options.port, this.options.host, () => {
-        server.off("error", onError);
-        resolve();
-      });
     });
     const port = this.addressPort();
     this.onState(false, `Bridge listening on ${this.options.host}:${port}`);

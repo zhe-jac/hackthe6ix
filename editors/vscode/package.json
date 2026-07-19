@@ -2,7 +2,7 @@
   "name": "chudvis-vscode",
   "displayName": "Chudvis",
   "description": "Wake-word voice navigation, explanations, and bounded code edits for VS Code.",
-  "version": "0.2.0",
+  "version": "0.3.5",
   "publisher": "chudvis",
   "license": "UNLICENSED",
   "repository": {
@@ -30,6 +30,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onView:chudvis.sidebar",
+    "onCommand:chudvis.toggle",
     "onCommand:chudvis.startBridge",
     "onCommand:chudvis.stopBridge"
   ],
@@ -54,6 +55,26 @@
       ]
     },
     "commands": [
+      {
+        "command": "chudvis.toggle",
+        "title": "Chudvis: Toggle Controls"
+      },
+      {
+        "command": "chudvis.start",
+        "title": "Chudvis: Start Gaze, Gesture, and Voice Controls"
+      },
+      {
+        "command": "chudvis.stop",
+        "title": "Chudvis: Stop Gaze, Gesture, and Voice Controls"
+      },
+      {
+        "command": "chudvis.calibrate",
+        "title": "Chudvis: Calibrate Gaze"
+      },
+      {
+        "command": "chudvis.testTracking",
+        "title": "Chudvis: Test Tracking Safely"
+      },
       {
         "command": "chudvis.startBridge",
         "title": "Chudvis: Start IDE Bridge"
@@ -93,6 +114,13 @@
       {
         "command": "chudvis.undo",
         "title": "Chudvis: Undo Last Edit"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "chudvis.toggle",
+        "key": "ctrl+alt+g",
+        "mac": "cmd+alt+g"
       }
     ],
     "configuration": {
@@ -176,12 +204,51 @@
           "minimum": 1000,
           "maximum": 250000,
           "description": "Maximum combined original and replacement characters in one Chudvis edit."
+        },
+        "chudvis.runtime.preview": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show the camera landmark preview while IDE controls are running."
+        },
+        "chudvis.runtime.voice": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable wake-word voice and the local Whisper fallback in IDE mode."
+        },
+        "chudvis.runtime.uvExecutable": {
+          "type": "string",
+          "default": "uv",
+          "scope": "machine",
+          "description": "Windows-native uv executable or absolute path used by the packaged Python runtime."
+        },
+        "chudvis.runtime.pythonVersion": {
+          "type": "string",
+          "default": "3.12",
+          "scope": "machine",
+          "description": "Python version used for the isolated packaged runtime environment."
+        },
+        "chudvis.runtime.sourceRoot": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Optional Chudvis source root override for extension development. Leave empty to use the packaged runtime."
+        },
+        "chudvis.runtime.extraArguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "default": [],
+          "scope": "machine",
+          "description": "Additional direct arguments for calibrate, test, or IDE mode, such as --camera and 1."
         }
       }
     }
   },
   "scripts": {
-    "compile": "tsc -p tsconfig.json",
+    "stage-runtime": "node scripts/stage-runtime.mjs",
+    "compile": "npm run stage-runtime && tsc -p tsconfig.json",
     "check-types": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src --max-warnings=0",
     "format:check": "prettier --check src package.json tsconfig.json eslint.config.mjs",

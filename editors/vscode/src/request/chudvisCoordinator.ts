@@ -16,7 +16,10 @@ import type {
 import { WorkspaceTools } from "../model/workspaceTools";
 import { EditReviewPresenter } from "../review/editReview";
 import { ReviewNavigator } from "../review/reviewNavigator";
-import { ChudvisSidebar, type SidebarAction } from "../ui/chudvisSidebar";
+import {
+  ChudvisSidebar,
+  type SidebarRequestAction,
+} from "../ui/chudvisSidebar";
 import type { StatusPresenter } from "../ui/status";
 import {
   SafeWorkspace,
@@ -440,7 +443,7 @@ export class ChudvisCoordinator implements vscode.Disposable {
     this.report(`Opened symbol ${selected.name}`);
   }
 
-  public async handleAction(action: SidebarAction): Promise<void> {
+  public async handleAction(action: SidebarRequestAction): Promise<void> {
     try {
       switch (action) {
         case "openChanges":

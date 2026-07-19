@@ -369,3 +369,37 @@ class GazeEstimator:
         raw = self.profile.predict(features)
         point, stable = self.smoother.update(raw, timestamp)
         return GazeSample(point, confidence, stable, timestamp)
+
+
+class GazeConfidenceGate:
+    """Reject unreliable gaze while tolerating brief confidence flicker."""
+
+    def __init__(
+        self,
+        minimum_confidence: float,
+        grace_seconds: float,
+        release_ratio: float = 0.70,
+    ) -> None:
+        if not 0.0 <= minimum_confidence <= 1.0:
+            raise ValueError("Minimum gaze confidence must be between zero and one")
+        if grace_seconds < 0.0:
+            raise ValueError("Gaze confidence grace period cannot be negative")
+        if not 0.0 <= release_ratio <= 1.0:
+            raise ValueError("Gaze confidence release ratio must be between zero and one")
+        self.minimum_confidence = minimum_confidence
+        self.grace_seconds = grace_seconds
+        self.release_confidence = minimum_confidence * release_ratio
+        self._last_strong_at: float | None = None
+
+    def accepts(self, sample: GazeSample) -> bool:
+        if sample.confidence >= self.minimum_confidence:
+            self._last_strong_at = sample.timestamp
+            return True
+        return (
+            self._last_strong_at is not None
+            and sample.timestamp - self._last_strong_at <= self.grace_seconds
+            and sample.confidence >= self.release_confidence
+        )
+
+    def reset(self) -> None:
+        self._last_strong_at = None

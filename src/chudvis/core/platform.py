@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,7 +13,36 @@ class PlatformInfo:
     screen_size: tuple[int, int] | None
 
 
+def configure_process_for_desktop_input() -> None:
+    """Use physical desktop coordinates on Windows before opening any UI."""
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+
+        # Per-monitor-v2 awareness keeps Tk/OpenCV screen geometry and the
+        # absolute pynput controller in the same physical-pixel coordinate space.
+        if bool(ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))):
+            return
+    except (AttributeError, OSError):
+        pass
+    try:
+        import ctypes
+
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        import ctypes
+
+        ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
 def get_screen_size() -> tuple[int, int]:
+    configure_process_for_desktop_input()
     try:
         import tkinter
 

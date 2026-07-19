@@ -16,6 +16,8 @@ import { ChudvisCoordinator } from "./request/chudvisCoordinator";
 import { RequestCoordinator } from "./request/requestCoordinator";
 import { EditReviewPresenter } from "./review/editReview";
 import { ReviewNavigator } from "./review/reviewNavigator";
+import { type RuntimeBridgeSettings, type RuntimeMode } from "./runtime/launch";
+import { ChudvisRuntimeManager } from "./runtime/runtimeManager";
 import { ChudvisSidebar } from "./ui/chudvisSidebar";
 import { StatusPresenter } from "./ui/status";
 import { parseChudvisInbound } from "./voice/protocol";
@@ -30,6 +32,15 @@ function bridgeOptions(): BridgeServerOptions {
     sessionToken: configuration.get<string>("sessionToken", ""),
     maxMessageBytes: configuration.get<number>("maxMessageBytes", 262_144),
   };
+}
+
+function addressIsInUse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "EADDRINUSE"
+  );
 }
 
 class ExtensionRuntime implements vscode.Disposable {
@@ -62,11 +73,23 @@ class ExtensionRuntime implements vscode.Disposable {
   private readonly provider: BackboardProvider;
   private readonly sidebar: ChudvisSidebar;
   private readonly chudvis: ChudvisCoordinator;
+  private readonly perception: ChudvisRuntimeManager;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
     this.provider = new BackboardProvider(context, this.output);
     const holder: { coordinator?: ChudvisCoordinator } = {};
     this.sidebar = new ChudvisSidebar((action) => {
+      switch (action) {
+        case "toggleControls":
+          void this.toggleControls();
+          return;
+        case "testTracking":
+          void this.startRuntimeMode("diagnostics");
+          return;
+        case "calibrate":
+          void this.startRuntimeMode("calibrate");
+          return;
+      }
       if (holder.coordinator !== undefined) {
         void holder.coordinator.handleAction(action);
       }
@@ -84,6 +107,12 @@ class ExtensionRuntime implements vscode.Disposable {
     );
     holder.coordinator = coordinator;
     this.chudvis = coordinator;
+    this.perception = new ChudvisRuntimeManager(
+      context,
+      this.output,
+      (detail) => this.report(detail),
+      (mode, code) => this.runtimeExited(mode, code),
+    );
     context.subscriptions.push(
       this.output,
       this.status,
@@ -97,10 +126,25 @@ class ExtensionRuntime implements vscode.Disposable {
         this.sidebar,
       ),
       vscode.commands.registerCommand("chudvis.startBridge", () =>
-        this.startBridge(),
+        this.startBridge(true),
       ),
       vscode.commands.registerCommand("chudvis.stopBridge", () =>
-        this.stopBridge(),
+        this.stopEverything(),
+      ),
+      vscode.commands.registerCommand("chudvis.toggle", () =>
+        this.toggleControls(),
+      ),
+      vscode.commands.registerCommand("chudvis.start", () =>
+        this.startControls(true),
+      ),
+      vscode.commands.registerCommand("chudvis.stop", () =>
+        this.stopControls(),
+      ),
+      vscode.commands.registerCommand("chudvis.calibrate", () =>
+        this.startRuntimeMode("calibrate"),
+      ),
+      vscode.commands.registerCommand("chudvis.testTracking", () =>
+        this.startRuntimeMode("diagnostics"),
       ),
       vscode.commands.registerCommand("chudvis.nextChange", () =>
         this.chudvis.navigateReview(1),
@@ -132,8 +176,46 @@ class ExtensionRuntime implements vscode.Disposable {
         if (event.affectsConfiguration("chudvis.bridge")) {
           void this.restartBridge();
         }
+        if (
+          event.affectsConfiguration("chudvis.runtime") &&
+          this.perception.running
+        ) {
+          void this.perception.restart();
+        }
       }),
+      this.perception,
     );
+  }
+
+  private runtimeExited(mode: RuntimeMode, code: number | null): void {
+    this.setControlsRunning(false);
+    if (code !== 0) {
+      return;
+    }
+    if (mode === "calibrate") {
+      this.report("Gaze calibration completed; Chudvis controls are stopped");
+      const quality = this.perception.calibrationQuality();
+      if (quality?.poor === true) {
+        void vscode.window
+          .showWarningMessage(
+            `Gaze calibration quality is low (median ${quality.medianErrorPx.toFixed(0)} px, p95 ${quality.p95ErrorPx.toFixed(0)} px). Recalibrate before starting Chudvis.`,
+            "Recalibrate Gaze",
+          )
+          .then((action) => {
+            if (action === "Recalibrate Gaze") {
+              void this.startRuntimeMode("calibrate");
+            }
+          });
+      } else {
+        const shortcut =
+          process.platform === "darwin" ? "Cmd+Alt+G" : "Ctrl+Alt+G";
+        void vscode.window.showInformationMessage(
+          `Gaze calibration is ready. Press ${shortcut} to start Chudvis.`,
+        );
+      }
+    } else if (mode === "diagnostics") {
+      this.report("Tracking diagnostics closed; Chudvis controls are stopped");
+    }
   }
 
   private report(message: string): void {
@@ -205,9 +287,9 @@ class ExtensionRuntime implements vscode.Disposable {
     }
   }
 
-  public async startBridge(): Promise<void> {
+  public async startBridge(allowEphemeralPort = false): Promise<boolean> {
     if (this.bridge !== undefined) {
-      return;
+      return true;
     }
     const disclosed = this.context.globalState.get<boolean>(
       "chudvis.cloudDisclosureAccepted",
@@ -223,33 +305,135 @@ class ExtensionRuntime implements vscode.Disposable {
         this.status.setDetail(
           "Cloud disclosure not accepted; bridge not started",
         );
-        return;
+        return false;
       }
       await this.context.globalState.update(
         "chudvis.cloudDisclosureAccepted",
         true,
       );
     }
-    const bridge = new BridgeServer(
-      bridgeOptions(),
-      (notification) => this.dispatch(notification),
-      (connected, detail) => {
-        this.output.info(detail);
-        this.status.setBridge(connected, detail);
-      },
-    );
-    this.bridge = bridge;
-    try {
-      await bridge.start();
-    } catch (error: unknown) {
-      this.bridge = undefined;
-      const detail =
-        error instanceof Error ? error.message : "unknown bridge error";
-      this.output.error(detail);
-      this.status.setBridge(false, detail);
-      void vscode.window.showErrorMessage(
-        `Chudvis bridge could not start: ${detail}`,
+    const preferred = bridgeOptions();
+    const ports =
+      allowEphemeralPort && preferred.port !== 0
+        ? [preferred.port, 0]
+        : [preferred.port];
+    for (const port of ports) {
+      const options = { ...preferred, port };
+      const bridge = new BridgeServer(
+        options,
+        (notification) => this.dispatch(notification),
+        (connected, detail) => {
+          this.output.info(detail);
+          this.status.setBridge(connected, detail);
+        },
       );
+      this.bridge = bridge;
+      try {
+        await bridge.start();
+        if (port === 0) {
+          this.output.warn(
+            `Configured bridge port ${preferred.port} belongs to another VS Code window; this window is using ${bridge.addressPort()}.`,
+          );
+        }
+        return true;
+      } catch (error: unknown) {
+        this.bridge = undefined;
+        if (addressIsInUse(error) && port === preferred.port) {
+          if (allowEphemeralPort) {
+            continue;
+          }
+          const detail = `Chudvis is active in another VS Code window on ${preferred.host}:${preferred.port}; this window is standing by`;
+          this.output.info(detail);
+          this.status.setBridge(false, detail);
+          return false;
+        }
+        const detail =
+          error instanceof Error ? error.message : "unknown bridge error";
+        this.output.error(detail);
+        this.status.setBridge(false, detail);
+        void vscode.window.showErrorMessage(
+          `Chudvis bridge could not start: ${detail}`,
+        );
+        return false;
+      }
+    }
+    return false;
+  }
+
+  private async startControls(allowEphemeralPort = false): Promise<void> {
+    if (!this.perception.calibrationReady()) {
+      const action = await vscode.window.showWarningMessage(
+        "Chudvis needs a native gaze calibration before controls can start.",
+        "Calibrate Gaze",
+      );
+      if (action === "Calibrate Gaze") {
+        await this.startRuntimeMode("calibrate");
+      }
+      return;
+    }
+    const quality = this.perception.calibrationQuality();
+    if (quality?.poor === true) {
+      const action = await vscode.window.showWarningMessage(
+        `Current gaze calibration is low quality (median ${quality.medianErrorPx.toFixed(0)} px, p95 ${quality.p95ErrorPx.toFixed(0)} px).`,
+        "Recalibrate Gaze",
+        "Start Anyway",
+      );
+      if (action === "Recalibrate Gaze") {
+        await this.startRuntimeMode("calibrate");
+      }
+      if (action !== "Start Anyway") {
+        return;
+      }
+    }
+    if (!(await this.startBridge(allowEphemeralPort))) {
+      return;
+    }
+    try {
+      const bridge = this.bridge;
+      if (bridge === undefined) {
+        throw new Error(
+          "Chudvis bridge stopped before the runtime could start",
+        );
+      }
+      const options = bridgeOptions();
+      const connection: RuntimeBridgeSettings = {
+        host: options.host,
+        port: bridge.addressPort(),
+        sessionToken: options.sessionToken,
+      };
+      await this.perception.start("ide", connection);
+      this.setControlsRunning(true);
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error ? error.message : "unknown runtime error";
+      this.report(detail);
+      void vscode.window.showErrorMessage(detail);
+    }
+  }
+
+  private async stopControls(): Promise<void> {
+    await this.perception.stop();
+    this.setControlsRunning(false);
+    this.report("Gaze, gesture, and voice controls stopped");
+  }
+
+  private async toggleControls(): Promise<void> {
+    if (this.perception.activeMode === "ide") {
+      await this.stopControls();
+    } else {
+      await this.startControls(true);
+    }
+  }
+
+  private async startRuntimeMode(mode: RuntimeMode): Promise<void> {
+    this.setControlsRunning(false);
+    try {
+      await this.perception.start(mode);
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error ? error.message : "unknown runtime error";
+      this.report(detail);
+      void vscode.window.showErrorMessage(detail);
     }
   }
 
@@ -266,23 +450,52 @@ class ExtensionRuntime implements vscode.Disposable {
     await this.startBridge();
   }
 
+  private async stopEverything(): Promise<void> {
+    await this.perception.stop();
+    this.setControlsRunning(false);
+    await this.stopBridge();
+  }
+
+  private setControlsRunning(running: boolean): void {
+    this.status.setControls(running);
+    this.sidebar.setControls(running);
+  }
+
+  public initialize(): void {
+    this.setControlsRunning(false);
+    const shortcut = process.platform === "darwin" ? "Cmd+Alt+G" : "Ctrl+Alt+G";
+    void vscode.window
+      .showInformationMessage(
+        `Chudvis is off. Press ${shortcut} to start or stop all controls.`,
+        "Recalibrate Gaze",
+      )
+      .then((action) => {
+        if (action === "Recalibrate Gaze") {
+          void this.startRuntimeMode("calibrate");
+        }
+      });
+  }
+
+  public async shutdown(): Promise<void> {
+    await this.perception.stop();
+    await this.stopBridge();
+  }
+
   public dispose(): void {
-    void this.stopBridge();
+    void this.shutdown();
   }
 }
 
-export async function activate(
-  context: vscode.ExtensionContext,
-): Promise<void> {
+export function activate(context: vscode.ExtensionContext): void {
   runtime = new ExtensionRuntime(context);
   context.subscriptions.push(runtime);
-  await runtime.startBridge();
+  runtime.initialize();
 }
 
 export async function deactivate(): Promise<void> {
   const active = runtime;
   runtime = undefined;
   if (active !== undefined) {
-    await active.stopBridge();
+    await active.shutdown();
   }
 }

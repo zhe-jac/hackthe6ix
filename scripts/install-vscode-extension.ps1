@@ -19,6 +19,8 @@ if ($null -eq $code) {
     throw "Windows VS Code CLI was not found. Add the VS Code bin directory to PATH."
 }
 
+# code.cmd delegates through cmd.exe, which cannot inherit a WSL UNC working directory.
+Set-Location -LiteralPath $env:TEMP
 & $code.Source --install-extension $destination --force
 if ($LASTEXITCODE -ne 0) {
     throw "VS Code extension installation failed with exit code $LASTEXITCODE"

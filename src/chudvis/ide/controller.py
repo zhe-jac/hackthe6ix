@@ -14,6 +14,7 @@ from chudvis.core.events import (
     Point,
     RoleGestureEvent,
 )
+from chudvis.gaze.model import GazeConfidenceGate
 from chudvis.ide.adapter import IdeAdapter
 from chudvis.speech.realtime_voice import VoiceEventType, VoiceSessionService, VoiceState
 
@@ -53,6 +54,10 @@ class IdeInteractionController:
         self.dictation = dictation
         self.voice_session = voice_session
         self.status = status
+        self.gaze_gate = GazeConfidenceGate(
+            minimum_gaze_confidence,
+            max_gaze_age_seconds,
+        )
         self.state = IdeControllerState.TRACKING
         self.latest_gaze: GazeSample | None = None
         self.locked_gaze: GazeSample | None = None
@@ -65,7 +70,7 @@ class IdeInteractionController:
         return Point(point.x * self.screen_size[0], point.y * self.screen_size[1])
 
     def on_gaze(self, sample: GazeSample) -> None:
-        if sample.confidence < self.minimum_gaze_confidence:
+        if not self.gaze_gate.accepts(sample):
             return
         self.latest_gaze = sample
         if self.state in (

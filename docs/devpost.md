@@ -6,15 +6,13 @@
     Chudvis
 </h1>
 
-> **Hands-free multi-modal coding in VS Code — your eyes point, your hands commit, your voice does the rest.**
+> **Contact-free multi-modal coding in VS Code — your eyes point, your gestures commit, your voice does the rest.**
 
 ---
 
 ## Inspiration
 
-Every developer tool assumes a mouse and a keyboard. That assumption excludes people with limited mobility, anyone recovering from an injury, and anyone whose hands are busy, we've spent millions in research understanding the ergonomics behind peripheral devices — and it's the single hardest factor to remove, because navigating our IDE/OS needs precision.
-
-The obvious fix is eye tracking, but on its own it fails. Gaze-only interfaces suffer the **"Midas touch"** problem: everything you look at gets clicked. We wanted to know if separating *where you're looking* from *what you're committing to* would be enough to make hands-free coding actually usable.
+Every developer tool assumes a mouse and a keyboard. That assumption excludes people with limited mobility, anyone recovering from an injury, and anyone whose hands are busy. We've spent millions in research understanding the ergonomics behind peripheral devices — and it's the single hardest factor to remove, because navigating our IDE/OS needs precision. The obvious fix is eye tracking, but on its own it fails. Gaze-only interfaces suffer the **"Midas touch"** problem: everything you look at gets clicked. We wanted to know if separating *where you're looking* from *what you're committing to* would be enough to make hands-free coding actually usable.
 
 ## What it does
 

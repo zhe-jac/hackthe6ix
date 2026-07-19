@@ -2,9 +2,9 @@
   <img src="docs/assets/chudvis-header.png" width="500" alt="Chudvis logo">
 </p>
 
-# Chudvis (Hands-free multi-modal coding in VS Code — your eyes point, your hands commit, your voice does the rest.)
+# Chudvis (Contact-free multi-modal coding in VS Code — your eyes point, your gestures commit, your voice does the rest.)
 
-Chudvis is a hands-free VS Code extension. It uses webcam-based gaze tracking and hand gestures to
+Chudvis is a contact-free VS Code extension. It uses webcam-based gaze tracking and hand gestures to
 select and navigate code, plus an optional local “Chudvis” wake word for voice commands, questions,
 and guarded code edits.
 

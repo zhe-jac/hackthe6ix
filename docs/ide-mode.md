@@ -3,8 +3,8 @@
 IDE mode separates physical perception from editor semantics. The extension launches and supervises
 the packaged native Python runtime, which owns the camera, gaze calibration, hand identity, gesture
 state machines, one microphone stream, local “Chudvis” detection, ElevenLabs realtime speech I/O,
-and the local Whisper fallback. The VS Code extension owns document state, deterministic command
-routing, Backboard requests, bounded edit validation, native diffs, Undo, and the Chudvis sidebar.
+and the local Whisper fallback. The VS Code extension owns document state, model-planned command
+execution, Backboard requests, bounded edit validation, native diffs, Undo, and the Chudvis sidebar.
 
 Extension activation is passive: it registers the UI and commands but does not start the bridge,
 camera, microphone, or Python runtime. `Ctrl+Alt+G` on Windows/Linux (`Cmd+Alt+G` on macOS), the
@@ -27,7 +27,7 @@ Chudvis Python runtime
         v
 VS Code extension
   semantic selection
-  deterministic voice router
+  model-planned voice actions
   Backboard provider + read-only workspace tools
   exact-text edit validator + native diff/Undo
   Chudvis webview view
@@ -95,11 +95,11 @@ document-version changes invalidate stored context.
 ## Voice pipeline and request state
 
 ```text
-microphone -> local Sherpa “Chudvis” -> ElevenLabs WebSocket -> VAD commit -> router
-                 no network audio       partial transcript              |
-                                                                       +-> local command
-                                                                       +-> question
-                                                                       +-> bounded edit
+microphone -> local Sherpa “Chudvis” -> ElevenLabs WebSocket -> VAD commit -> Backboard planner
+                 no network audio       partial transcript                       |
+                                                                                +-> local command
+                                                                                +-> question
+                                                                                +-> bounded edit
 ```
 
 One continuously owned `sounddevice.InputStream` uses blocking 100 ms reads in an isolated capture
@@ -116,17 +116,30 @@ Every request requires a fresh wake word. “Cancel,” “never mind,” open p
 button, shutdown, and Backboard cancellation all return safely to Ready. If wake streaming cannot
 start, editor-hand thumbs-up retains the existing local Whisper preview/confirmation flow.
 
-The deterministic router handles `create` / `make` / `generate ... file`, `open file`, `go to
-symbol`, `show references`, Undo, and Cancel without Backboard. File creation is limited to a new,
-non-secret, non-binary relative path in an open workspace and never overwrites an existing file.
-Open-file routing normalizes spoken extensions such as “dot P Y” and uses bounded edit-distance
-matching for minor transcription errors; ties require a Quick Pick. Unrecognized intent fails with
-an explicit routing error instead of silently falling through to the question model.
+Every finalized transcript goes to a tool-capable Backboard model. The model decides whether it is
+an open-file, create-file, symbol-navigation, references, VS Code UI command, Undo, Cancel, question,
+edit, or unsupported request and supplies the execution arguments in exactly one structured tool
+call. There is no keyword or regular-expression intent classifier. The extension validates that
+call and executes it through its bounded local action implementation.
 
-`explain`, `analyze`, `why`, `what`, and `how` are questions. Explicit mutation verbs such as
-`change`, `create`, `fix`, `implement`, `remove`, `rename`, `replace`, and `update` are edits when the
-request is not the dedicated create-file form. Question phrasing wins over mutation words, and
-anything ambiguous is a question.
+For workbench actions, the extension intersects a safe built-in catalog with the commands currently
+registered in the active VS Code window and gives the resulting IDs and descriptions to the model.
+This supports actions such as opening Settings, creating or toggling an integrated terminal, showing
+the Command Palette, and switching workbench views without adding speech patterns. The selected ID
+is checked against the offered catalog again before `vscode.commands.executeCommand` runs it. These
+catalog commands take no model-generated arguments and cannot send text to a terminal.
+
+Additional command IDs can be listed in `chudvis.voice.additionalCommands`. Chudvis reads their
+titles from installed extensions' `contributes.commands` metadata, includes only commands currently
+registered with VS Code, invokes them without arguments, and requires native modal confirmation each
+time. This explicit opt-in is necessary because VS Code exposes command IDs but not argument schemas
+or security metadata.
+
+File creation remains limited to new, non-secret, non-binary relative paths in an open workspace and
+never overwrites an existing file. Open-file execution tolerates spoken extensions such as “dot P Y”
+and uses bounded edit-distance matching for minor transcription errors; ties require a Quick Pick.
+The model can explicitly reject a request when no available action matches or the instruction is too
+unclear to execute safely.
 
 ## Backboard context and memory
 
@@ -136,25 +149,29 @@ Backboard's Models API. The defaults are `anthropic / claude-opus-4-7-20250501` 
 `google / gemini-3.5-flash` for questions. If a default is unavailable, Chudvis requires a Quick
 Pick selection; edit choices must support tools and at least 32k context.
 
-The extension creates one assistant and persistent editing thread per workspace. Editing uses
+The extension creates one assistant and persistent editing thread per workspace. Routing and
+questions use temporary threads with memory off and delete them afterward. Editing uses
 `memory="Auto"`, with a memory prompt that permits only durable project decisions and concise
-applied-edit summaries. Questions use a temporary thread with memory off, stream into the sidebar,
-and delete that thread afterward. **Clear Editing Memory** deletes the remote thread and assistant
-and clears their workspace IDs.
+applied-edit summaries. **Clear Editing Memory** deletes the remote thread and assistant and clears
+their workspace IDs.
 
-The initial request contains only the resolved source, necessary imports, relative path, language,
-and document version. Target priority is gesture semantic selection, manual selection, an explicitly
+The routing request contains only the transcript. After the model selects an edit, the initial edit
+request contains only the resolved source, necessary imports, relative path, language, and document
+version. Target priority is gesture semantic selection, manual selection, an explicitly
 named active-document symbol, the smallest cursor-enclosing symbol, then the active file. Backboard
 can inspect more context only through bounded `read_workspace_file`, `find_workspace_symbol`, and
 `list_workspace_files` tools. It has no shell, terminal, test, create, delete, or rename tool.
+Chudvis tracks Backboard tool-call IDs across continuation responses because those responses may
+repeat calls that were already answered; each workspace call is executed at most once.
 
 ## Edit validation and review
 
-Backboard proposes exact existing `originalText` → `replacementText` operations. Chudvis rejects
-empty or non-unique originals, stale versions, overlaps, paths outside workspace roots, generated or
-dependency folders, secrets, binaries, oversized files/responses, and changes over the configured
-limit. At most three files can be confirmed in one expanded request. All accepted replacements are
-applied together with one `WorkspaceEdit`.
+Backboard proposes exact existing `originalText` → `replacementText` operations. Chudvis permits an
+empty original only when the existing file itself is empty; otherwise originals must be unique.
+Chudvis rejects stale versions, overlaps, paths outside workspace roots, generated or dependency
+folders, secrets, binaries, oversized files/responses, and changes over the configured limit. At
+most three files can be confirmed in one expanded request. All accepted replacements are applied
+together with one `WorkspaceEdit`.
 
 Operations wholly inside the resolved target auto-apply. If any operation leaves that boundary—even
 for another function in the same file—the extension creates read-only original/proposed snapshots,

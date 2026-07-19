@@ -3,9 +3,8 @@ import test from "node:test";
 
 import {
   fileMatchScore,
-  isSupportedCreateFilePath,
   normalizeSpokenFileQuery,
-  requestedFilePath,
+  referencedFileQueries,
 } from "../voice/fileIntent";
 
 void test("spoken file names normalize common extensions", () => {
@@ -16,20 +15,20 @@ void test("spoken file names normalize common extensions", () => {
   );
 });
 
-void test("typed file creation adds the requested extension", () => {
-  assert.equal(requestedFilePath("markdown", '"Hello."'), "Hello.md");
-  assert.equal(
-    requestedFilePath("python", "tools slash check"),
-    "tools/check.py",
-  );
-  assert.equal(requestedFilePath(undefined, "notes.md"), "notes.md");
-  assert.equal(isSupportedCreateFilePath("tools slash check dot P Y"), true);
-  assert.equal(isSupportedCreateFilePath("this function return early"), false);
-  assert.equal(
-    isSupportedCreateFilePath(
-      "a simple for loop that counts from one to 10 in test.py",
+void test("file references are extracted from edit instructions", () => {
+  assert.deepEqual(
+    referencedFileQueries(
+      "Write a for loop in test.py that prints each number.",
     ),
-    false,
+    ["test.py"],
+  );
+  assert.deepEqual(
+    referencedFileQueries("Update source slash runner dot pi."),
+    ["source/runner.py"],
+  );
+  assert.deepEqual(
+    referencedFileQueries("Move the helper from source.py to target.py"),
+    ["source.py", "target.py"],
   );
 });
 

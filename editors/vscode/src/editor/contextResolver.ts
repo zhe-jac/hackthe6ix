@@ -4,12 +4,18 @@ import type {
   SelectionContext,
   SemanticSelectionService,
 } from "./semanticSelection";
+import { fileMatchScore, referencedFileQueries } from "../voice/fileIntent";
+import {
+  isExcludedWorkspacePath,
+  WORKSPACE_FILE_EXCLUDE,
+} from "../workspace/safeWorkspace";
 
 export type EditTargetKind =
   | "gesture-selection"
   | "manual-selection"
   | "named-symbol"
   | "cursor-symbol"
+  | "explicit-file"
   | "active-file";
 
 export interface ResolvedEditTarget extends SelectionContext {
@@ -86,9 +92,23 @@ export class EditContextResolver {
   ) {}
 
   public async resolve(instruction: string): Promise<ResolvedEditTarget> {
+    const explicitDocument = await this.explicitDocument(instruction);
+    if (explicitDocument !== undefined) {
+      const end = explicitDocument.positionAt(
+        explicitDocument.getText().length,
+      );
+      return this.target(
+        explicitDocument,
+        new vscode.Range(new vscode.Position(0, 0), end),
+        "explicit-file",
+      );
+    }
+
     const editor = vscode.window.activeTextEditor;
     if (editor === undefined) {
-      throw new Error("Open a text editor before asking Chudvis to edit code");
+      throw new Error(
+        "Open a text editor or name a workspace file before asking Chudvis to edit code",
+      );
     }
     const document = editor.document;
     const gesture = this.semanticSelection.context();
@@ -187,5 +207,54 @@ export class EditContextResolver {
       imports: collectImports(document),
       label,
     };
+  }
+
+  private async explicitDocument(
+    instruction: string,
+  ): Promise<vscode.TextDocument | undefined> {
+    const queries = referencedFileQueries(instruction);
+    if (queries.length === 0) {
+      return undefined;
+    }
+    if (queries.length > 1) {
+      throw new Error(
+        `The edit request names more than one file (${queries.join(", ")}); name one target file`,
+      );
+    }
+    const query = queries[0];
+    if (query === undefined) {
+      return undefined;
+    }
+    const ranked = (
+      await vscode.workspace.findFiles("**/*", WORKSPACE_FILE_EXCLUDE, 1_001)
+    )
+      .flatMap((uri) => {
+        const relativePath = vscode.workspace.asRelativePath(uri, false);
+        if (isExcludedWorkspacePath(relativePath)) {
+          return [];
+        }
+        const score = fileMatchScore(query, relativePath);
+        return score === undefined ? [] : [{ uri, relativePath, score }];
+      })
+      .sort(
+        (left, right) =>
+          left.score - right.score ||
+          left.relativePath.localeCompare(right.relativePath),
+      );
+    const bestScore = ranked[0]?.score;
+    const matches = ranked.filter((candidate) => candidate.score === bestScore);
+    if (matches.length === 0) {
+      throw new Error(`No workspace file matches '${query}'`);
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `More than one workspace file matches '${query}'; include its folder`,
+      );
+    }
+    const match = matches[0];
+    if (match === undefined) {
+      throw new Error("Workspace file resolution failed");
+    }
+    return vscode.workspace.openTextDocument(match.uri);
   }
 }

@@ -31,7 +31,11 @@ import {
 } from "../workspace/safeWorkspace";
 import { fileMatchScore } from "../voice/fileIntent";
 import type { ChudvisInbound, VoiceState } from "../voice/protocol";
-import { routeVoiceRequest } from "../voice/router";
+import {
+  buildVoiceEditorCommandCatalog,
+  commandContributionsFromManifests,
+  type VoiceEditorCommand,
+} from "../voice/editorCommandCatalog";
 
 interface PendingReview {
   readonly model: PendingModelEdit;
@@ -166,22 +170,37 @@ export class ChudvisCoordinator implements vscode.Disposable {
     transcript: string,
   ): Promise<void> {
     try {
-      const route = routeVoiceRequest(transcript);
+      this.presentVoiceState("understanding", "Choosing a workspace action");
+      const editorCommands = await this.availableEditorCommands();
+      const route = await this.provider.routeRequest(
+        requestId,
+        transcript,
+        editorCommands,
+      );
       this.diagnostics?.record(
         "router",
-        "voice.route",
+        "voice.modelRoute",
         { transcript, route },
         requestId,
       );
       switch (route.kind) {
         case "open":
-          await this.openFile(route.query);
-          this.complete(requestId, "succeeded");
+          {
+            const opened = await this.openFile(route.query);
+            const summary = `Opened ${opened}`;
+            this.sidebar.setTarget(opened);
+            this.sidebar.setSummary(summary, false);
+            this.report(summary);
+            this.complete(requestId, "succeeded", summary);
+          }
           return;
-        case "create": {
-          const created = await this.createFile(route.path);
-          const summary = `Created ${created}`;
-          this.sidebar.setTarget(created);
+        case "createMany": {
+          const created: string[] = [];
+          for (const requestedPath of route.paths) {
+            created.push(await this.createFile(requestedPath));
+          }
+          const summary = `Created ${created.join(" and ")}`;
+          this.sidebar.setTarget(created.join(", "));
           this.sidebar.setSummary(summary, false);
           this.report(summary);
           this.complete(requestId, "succeeded", summary);
@@ -215,10 +234,13 @@ export class ChudvisCoordinator implements vscode.Disposable {
         case "edit":
           await this.edit(requestId, route.instruction);
           return;
+        case "editorCommand":
+          await this.executeEditorCommand(requestId, route.command);
+          return;
         case "unsupported": {
           const preview = route.instruction.slice(0, 160);
           throw new Error(
-            `Chudvis could not identify an action in “${preview}”. Use an explicit command such as create, open, make, fix, rename, or explain.`,
+            `Chudvis could not map “${preview}” to an action: ${route.reason}`,
           );
         }
       }
@@ -229,10 +251,63 @@ export class ChudvisCoordinator implements vscode.Disposable {
       const detail =
         error instanceof Error ? error.message : "Chudvis request failed";
       this.output.error(detail);
+      this.diagnostics?.record(
+        "request",
+        "failed",
+        { error: detail },
+        requestId,
+      );
       this.sidebar.setError(detail);
       void vscode.window.showErrorMessage(`Chudvis: ${detail}`);
       this.complete(requestId, "failed");
     }
+  }
+
+  private async availableEditorCommands(): Promise<
+    readonly VoiceEditorCommand[]
+  > {
+    const configured = vscode.workspace
+      .getConfiguration("chudvis.voice")
+      .get<readonly unknown[]>("additionalCommands", []);
+    const registered = await vscode.commands.getCommands(true);
+    const contributions = commandContributionsFromManifests(
+      vscode.extensions.all.map(
+        (extension) => extension.packageJSON as unknown,
+      ),
+    );
+    return buildVoiceEditorCommandCatalog(
+      registered,
+      configured,
+      contributions,
+    );
+  }
+
+  private async executeEditorCommand(
+    requestId: string,
+    command: VoiceEditorCommand,
+  ): Promise<void> {
+    const registered = await vscode.commands.getCommands(true);
+    if (!registered.includes(command.id)) {
+      throw new Error(`VS Code command '${command.id}' is no longer available`);
+    }
+    if (command.requiresConfirmation) {
+      const action = await vscode.window.showWarningMessage(
+        `Chudvis wants to run “${command.title}” (${command.id}).`,
+        { modal: true },
+        "Run Command",
+      );
+      if (action !== "Run Command") {
+        this.report("Editor command cancelled");
+        this.complete(requestId, "cancelled");
+        return;
+      }
+    }
+    await vscode.commands.executeCommand(command.id);
+    const summary = `Ran ${command.title}`;
+    this.sidebar.setTarget(command.title);
+    this.sidebar.setSummary(summary, false);
+    this.report(summary);
+    this.complete(requestId, "succeeded", summary);
   }
 
   private async answer(requestId: string, instruction: string): Promise<void> {
@@ -417,7 +492,7 @@ export class ChudvisCoordinator implements vscode.Disposable {
       });
   }
 
-  private async openFile(query: string): Promise<void> {
+  private async openFile(query: string): Promise<string> {
     const uris = await vscode.workspace.findFiles(
       "**/*",
       WORKSPACE_FILE_EXCLUDE,
@@ -456,10 +531,8 @@ export class ChudvisCoordinator implements vscode.Disposable {
     if (selected === undefined) {
       throw new Error("File selection was cancelled");
     }
-    await vscode.window.showTextDocument(
-      await vscode.workspace.openTextDocument(selected.uri),
-    );
-    this.report(`Opened ${selected.relative}`);
+    await vscode.commands.executeCommand("vscode.open", selected.uri);
+    return selected.relative;
   }
 
   private async createFile(requestedPath: string): Promise<string> {

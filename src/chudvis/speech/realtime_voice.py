@@ -59,6 +59,39 @@ class TtsSpeaker(Protocol):
     def speak(self, text: str, cancelled: threading.Event) -> None: ...
 
 
+class SpokenFeedbackUnavailableError(RuntimeError):
+    """The configured TTS service cannot serve this account and should be disabled."""
+
+
+def _elevenlabs_error_detail(response: Any) -> str:
+    """Return a bounded provider error without ever including request headers."""
+    try:
+        payload: object = response.json()
+    except Exception:
+        payload = getattr(response, "text", "")
+    detail: object = payload
+    if isinstance(payload, dict):
+        detail = payload.get("detail", payload)
+    if isinstance(detail, dict):
+        status = detail.get("status") or detail.get("type")
+        message = detail.get("message") or detail.get("error")
+        if status and message:
+            detail = f"{status}: {message}"
+        else:
+            detail = message or status or ""
+    if not isinstance(detail, str):
+        detail = ""
+    result = " ".join(detail.split())[:320]
+    headers = getattr(response, "headers", {})
+    request_id = ""
+    if hasattr(headers, "get"):
+        request_id = str(headers.get("request-id") or headers.get("x-request-id") or "")
+        request_id = " ".join(request_id.split())[:120]
+    if request_id:
+        result = f"{result}; request {request_id}" if result else f"request {request_id}"
+    return result
+
+
 class AudioInputStream(Protocol):
     def start(self) -> object: ...
 
@@ -427,12 +460,29 @@ class ElevenLabsTtsSpeaker:
             stream=True,
             timeout=(self._timeout, self._timeout),
         ) as response:
+            if response.status_code in {400, 401, 402, 403, 404, 422}:
+                detail = _elevenlabs_error_detail(response)
+                reason = f": {detail}" if detail else ""
+                if response.status_code == 402:
+                    action = (
+                        "Choose a voice available to this account and check both the workspace "
+                        "balance and this API key's credit quota."
+                    )
+                elif response.status_code == 404:
+                    action = "Choose another voice; the configured voice is no longer available."
+                else:
+                    action = "Review the configured ElevenLabs voice, model, and API-key access."
+                raise SpokenFeedbackUnavailableError(
+                    f"ElevenLabs TTS returned HTTP {response.status_code}{reason}. {action} "
+                    "Spoken feedback is disabled for this session."
+                )
             response.raise_for_status()
             with sd.RawOutputStream(
                 samplerate=self._sample_rate,
                 channels=1,
                 dtype="int16",
             ) as output:
+                remainder = b""
                 for chunk in response.iter_content(chunk_size=4096):
                     if cancelled.is_set():
                         return
@@ -441,7 +491,11 @@ class ElevenLabsTtsSpeaker:
                     received += len(chunk)
                     if received > self._max_audio_bytes:
                         raise RuntimeError("ElevenLabs TTS response exceeded the size limit")
-                    output.write(chunk)
+                    buffered = remainder + chunk
+                    aligned_length = len(buffered) - (len(buffered) % 2)
+                    if aligned_length:
+                        output.write(buffered[:aligned_length])
+                    remainder = buffered[aligned_length:]
 
 
 class VoiceSession:
@@ -551,6 +605,12 @@ class VoiceSession:
                 self._audio.put_nowait([])
             except queue.Full:
                 pass
+            return
+        if self.state not in {
+            VoiceState.READY,
+            VoiceState.CONNECTING,
+            VoiceState.LISTENING,
+        }:
             return
         if bool(getattr(status, "input_overflow", False)):
             self.capture_overflows += 1
@@ -779,13 +839,8 @@ class VoiceSession:
         if status == "speak":
             self._cancelled.clear()
             self._set_state(VoiceState.SPEAKING)
-            rearm_detail = ""
-            try:
-                if self._speaker is not None:
-                    self._speaker.speak(summary, self._cancelled)
-            except Exception as exc:
-                detail = str(exc).strip()[:420] or type(exc).__name__
-                rearm_detail = f"Spoken summary unavailable: {detail}"
+            rearm_detail, failed = self._speak_summary(summary)
+            if failed:
                 self._set_state(VoiceState.ERROR, rearm_detail)
             self._rearm(rearm_detail)
             return
@@ -799,16 +854,27 @@ class VoiceSession:
         rearm_detail = ""
         if summary and self._speaker is not None:
             self._set_state(VoiceState.SPEAKING)
-            try:
-                self._speaker.speak(summary, self._cancelled)
-            except Exception as exc:
-                detail = str(exc).strip()[:420] or type(exc).__name__
-                rearm_detail = f"Spoken summary unavailable: {detail}"
+            rearm_detail, failed = self._speak_summary(summary)
+            if failed:
                 self._set_state(VoiceState.ERROR, rearm_detail)
         with self._lock:
             self._completed.append(request_id)
             self._completion_pending.discard(request_id)
         self._rearm(rearm_detail)
+
+    def _speak_summary(self, summary: str) -> tuple[str, bool]:
+        speaker = self._speaker
+        if speaker is None:
+            return "", False
+        try:
+            speaker.speak(summary, self._cancelled)
+        except SpokenFeedbackUnavailableError as exc:
+            self._speaker = None
+            return str(exc).strip()[:500], False
+        except Exception as exc:
+            detail = str(exc).strip()[:420] or type(exc).__name__
+            return f"Spoken summary unavailable: {detail}", True
+        return "", False
 
     def _clear_audio(self) -> None:
         while True:

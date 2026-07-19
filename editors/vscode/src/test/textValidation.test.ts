@@ -7,7 +7,7 @@ import {
   uniqueTextRange,
 } from "../edits/textValidation";
 
-void test("exact text matching requires one unique non-empty occurrence", () => {
+void test("exact text matching requires one unique occurrence", () => {
   assert.deepEqual(uniqueTextRange("before target after", "target"), {
     startOffset: 7,
     endOffset: 13,
@@ -18,7 +18,11 @@ void test("exact text matching requires one unique non-empty occurrence", () => 
     /exactly once/u,
   );
   assert.throws(() => uniqueTextRange("aaa", "aa"), /exactly once/u);
-  assert.throws(() => uniqueTextRange("text", ""), /must not be empty/u);
+  assert.deepEqual(uniqueTextRange("", ""), {
+    startOffset: 0,
+    endOffset: 0,
+  });
+  assert.throws(() => uniqueTextRange("text", ""), /only for an empty file/u);
 });
 
 void test("overlap validation permits adjacent edits but rejects intersections", () => {
@@ -39,6 +43,17 @@ void test("overlap validation permits adjacent edits but rejects intersections",
           { startOffset: 4, endOffset: 8 },
         ],
         "file.ts",
+      ),
+    /overlap/u,
+  );
+  assert.throws(
+    () =>
+      assertNonOverlapping(
+        [
+          { startOffset: 0, endOffset: 0 },
+          { startOffset: 0, endOffset: 0 },
+        ],
+        "empty.py",
       ),
     /overlap/u,
   );

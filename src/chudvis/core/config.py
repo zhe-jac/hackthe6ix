@@ -60,7 +60,7 @@ class VoiceSettings:
     elevenlabs_stt_model: str = "scribe_v2_realtime"
     elevenlabs_stt_url: str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
     elevenlabs_tts_enabled: bool = True
-    elevenlabs_tts_voice_id: str = "21m00Tcm4TlvDq8ikWAM"
+    elevenlabs_tts_voice_id: str = ""
     elevenlabs_tts_model: str = "eleven_flash_v2_5"
     audio_chunk_ms: int = 100
     vad_silence_seconds: float = 1.2

@@ -29,6 +29,8 @@ class IdeAdapter(Protocol):
 
     def set_paused(self, paused: bool) -> None: ...
 
+    def runtime_ready(self, detail: str) -> None: ...
+
     def voice_state(
         self,
         state: VoiceState,
@@ -92,6 +94,9 @@ class SocketIdeAdapter:
 
     def set_paused(self, paused: bool) -> None:
         self.transport.notify("control.pause", {"paused": paused})
+
+    def runtime_ready(self, detail: str) -> None:
+        self.transport.notify("runtime.ready", {"message": detail[:500]})
 
     def voice_state(
         self,
@@ -191,6 +196,9 @@ class RecordingIdeAdapter:
 
     def set_paused(self, paused: bool) -> None:
         self._record("set_paused", paused)
+
+    def runtime_ready(self, detail: str) -> None:
+        self._record("runtime_ready", detail)
 
     def voice_state(
         self,

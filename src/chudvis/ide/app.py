@@ -113,6 +113,7 @@ class ChudvisIdeApplication:
         self._running = True
         voice_started = False
         voice_bridge_connected = False
+        runtime_ready_sent = False
         last_frame_at = monotonic()
         fps = 0.0
         if self.preview:
@@ -125,6 +126,8 @@ class ChudvisIdeApplication:
             ):
                 while self._running:
                     bridge_connected = self.ide_adapter.connected
+                    if runtime_ready_sent and not bridge_connected:
+                        runtime_ready_sent = False
                     if self.voice_session is not None and bridge_connected and not voice_started:
                         try:
                             self.voice_session.start()
@@ -160,6 +163,19 @@ class ChudvisIdeApplication:
                     for event in gestures.update(result.hands, now):
                         controller.on_gesture(event)
                     controller.poll()
+
+                    if bridge_connected and not runtime_ready_sent:
+                        if voice_started:
+                            detail = "Camera, microphone, and backend are ready"
+                        elif self.dictation is not None:
+                            detail = (
+                                "Camera and backend are ready; "
+                                "local voice fallback is available"
+                            )
+                        else:
+                            detail = "Camera and backend are ready; voice controls are disabled"
+                        self.ide_adapter.runtime_ready(detail)
+                        runtime_ready_sent = True
 
                     elapsed = max(now - last_frame_at, 1e-6)
                     instant_fps = 1.0 / elapsed

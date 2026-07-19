@@ -67,6 +67,21 @@
   },
   "allOf": [
     {
+      "if": { "properties": { "method": { "const": "runtime.ready" } } },
+      "then": {
+        "properties": {
+          "params": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["message"],
+            "properties": {
+              "message": { "type": "string", "minLength": 1, "maxLength": 500 }
+            }
+          }
+        }
+      }
+    },
+    {
       "if": { "properties": { "method": { "const": "diagnostic.event" } } },
       "then": {
         "properties": { "params": { "$ref": "#/$defs/diagnosticEventParams" } }
@@ -74,7 +89,9 @@
     },
     {
       "if": { "properties": { "method": { "const": "voice.state" } } },
-      "then": { "properties": { "params": { "$ref": "#/$defs/voiceStateParams" } } }
+      "then": {
+        "properties": { "params": { "$ref": "#/$defs/voiceStateParams" } }
+      }
     },
     {
       "if": { "properties": { "method": { "const": "voice.partial" } } },
@@ -87,7 +104,9 @@
               {
                 "type": "object",
                 "required": ["text"],
-                "properties": { "text": { "type": "string", "maxLength": 16000 } }
+                "properties": {
+                  "text": { "type": "string", "maxLength": 16000 }
+                }
               }
             ]
           }
@@ -106,7 +125,11 @@
                 "type": "object",
                 "required": ["transcript"],
                 "properties": {
-                  "transcript": { "type": "string", "minLength": 1, "maxLength": 16000 }
+                  "transcript": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 16000
+                  }
                 }
               }
             ]
@@ -118,7 +141,9 @@
       "if": {
         "properties": { "method": { "enum": ["edit.approve", "edit.cancel"] } }
       },
-      "then": { "properties": { "params": { "$ref": "#/$defs/requestOnlyParams" } } }
+      "then": {
+        "properties": { "params": { "$ref": "#/$defs/requestOnlyParams" } }
+      }
     },
     {
       "if": { "properties": { "method": { "const": "voice.cancel" } } },

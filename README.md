@@ -19,8 +19,9 @@ start a separate Python process or run any of the repository's platform scripts.
 - A microphone for voice features
 - Node.js and npm when building the extension from source
 
-Backboard is used for questions and code edits. ElevenLabs is used for realtime speech after the
-wake word. Gaze, gestures, calibration, and tracking diagnostics do not require either service.
+Backboard is used to plan voice actions, answer questions, and propose code edits. ElevenLabs is
+used for realtime speech after the wake word. Gaze, gestures, calibration, and tracking diagnostics
+do not require either service.
 
 ## Install from source
 
@@ -40,12 +41,14 @@ Reload VS Code after installation. If `code` is unavailable, install the generat
 
 Open the Chudvis view from the Activity Bar, then:
 
-1. Choose **Set Backboard Key** to enable questions and code edits.
+1. Choose **Set Backboard Key** to enable voice actions, questions, and code edits.
 2. Choose **Set ElevenLabs Key** to enable wake-word speech input.
-3. Choose **Recalibrate Gaze** and follow the on-screen targets.
-4. Choose **Test Tracking** to check gaze and gesture recognition without emitting mouse or
+3. Choose **Choose Voice** to select an ElevenLabs voice available to your account for spoken
+   feedback. API-key access and remaining credits do not guarantee access to every voice.
+4. Choose **Recalibrate Gaze** and follow the on-screen targets.
+5. Choose **Test Tracking** to check gaze and gesture recognition without emitting mouse or
    keyboard input.
-5. Choose **Start Controls** or press `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS).
+6. Choose **Start Controls** or press `Ctrl+Alt+G` (`Cmd+Alt+G` on macOS).
 
 Use the same button or shortcut to stop Chudvis. Installing or opening the extension does not start
 the camera, microphone, or controls automatically.

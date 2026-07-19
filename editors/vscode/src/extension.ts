@@ -27,7 +27,9 @@ import { parseChudvisInbound } from "./voice/protocol";
 let runtime: ExtensionRuntime | undefined;
 const ELEVENLABS_SECRET_KEY = "chudvis.elevenLabsApiKey";
 const ELEVENLABS_ENVIRONMENT_KEY = "ELEVENLABS_API_KEY";
-const DEFAULT_ELEVENLABS_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+// Voice availability is account-specific. In particular, ElevenLabs no longer grants
+// its former Rachel default (21m00Tcm4TlvDq8ikWAM) to accounts created after March 2026.
+const DEFAULT_ELEVENLABS_VOICE_ID = "";
 
 interface ElevenLabsVoice {
   readonly id: string;
@@ -96,6 +98,7 @@ function addressIsInUse(error: unknown): boolean {
 
 class ExtensionRuntime implements vscode.Disposable {
   private bridge: BridgeServer | undefined;
+  private controlsStarting = false;
   private paused = false;
   private readonly output = vscode.window.createOutputChannel("Chudvis", {
     log: true,
@@ -377,8 +380,8 @@ class ExtensionRuntime implements vscode.Disposable {
         .trim();
       const voiceStatus = !ttsEnabled
         ? "Disabled"
-        : voiceId === DEFAULT_ELEVENLABS_VOICE_ID
-          ? "Rachel (default)"
+        : voiceId.length === 0
+          ? "Choose a voice"
           : `Enabled · ${voiceId}`;
       this.sidebar.setServiceStatus(
         backboardConfigured ? "Key saved securely" : "Not configured",
@@ -403,7 +406,7 @@ class ExtensionRuntime implements vscode.Disposable {
       if (configured) {
         this.report("Backboard API key validated and saved securely");
         void vscode.window.showInformationMessage(
-          "Backboard is configured for Chudvis questions and code edits.",
+          "Backboard is configured for Chudvis voice actions, questions, and code edits.",
         );
       }
       return configured;
@@ -424,7 +427,9 @@ class ExtensionRuntime implements vscode.Disposable {
     this.report("Backboard API key removed from VS Code secure storage");
   }
 
-  private async configureElevenLabsApiKey(): Promise<boolean> {
+  private async configureElevenLabsApiKey(
+    chooseVoiceAfterSave = true,
+  ): Promise<boolean> {
     const key = await vscode.window.showInputBox({
       title: "Configure ElevenLabs API key",
       prompt:
@@ -442,9 +447,9 @@ class ExtensionRuntime implements vscode.Disposable {
     await this.context.secrets.store(ELEVENLABS_SECRET_KEY, key.trim());
     await this.refreshServiceStatus();
     this.report("ElevenLabs API key saved securely for the native runtime");
-    void vscode.window.showInformationMessage(
-      "ElevenLabs is configured. The key will be used the next time Chudvis controls start.",
-    );
+    if (chooseVoiceAfterSave) {
+      await this.configureElevenLabsVoice();
+    }
     return true;
   }
 
@@ -469,7 +474,7 @@ class ExtensionRuntime implements vscode.Disposable {
     try {
       let key = await this.effectiveElevenLabsApiKey();
       if (key === undefined) {
-        if (!(await this.configureElevenLabsApiKey())) {
+        if (!(await this.configureElevenLabsApiKey(false))) {
           return;
         }
         key = await this.effectiveElevenLabsApiKey();
@@ -594,6 +599,22 @@ class ExtensionRuntime implements vscode.Disposable {
       return;
     }
     if (
+      configuration.get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID).trim()
+        .length === 0
+    ) {
+      void vscode.window
+        .showWarningMessage(
+          "Choose an ElevenLabs voice available to this account before testing spoken feedback.",
+          "Choose Voice",
+        )
+        .then((action) => {
+          if (action === "Choose Voice") {
+            void this.configureElevenLabsVoice();
+          }
+        });
+      return;
+    }
+    if (
       this.perception.activeMode !== "ide" ||
       this.bridge?.connected !== true
     ) {
@@ -612,27 +633,63 @@ class ExtensionRuntime implements vscode.Disposable {
     const voiceEnabled = vscode.workspace
       .getConfiguration("chudvis.runtime")
       .get<boolean>("voice", true);
-    if (
-      !voiceEnabled ||
+    if (!voiceEnabled) {
+      return true;
+    }
+    const keyConfigured =
       (await this.savedElevenLabsApiKey()) !== undefined ||
-      this.inheritedElevenLabsApiKey() !== undefined
+      this.inheritedElevenLabsApiKey() !== undefined;
+    if (!keyConfigured) {
+      const action = await vscode.window.showWarningMessage(
+        "ElevenLabs is not configured. Wake-word realtime speech will be unavailable; gaze, gestures, and local thumbs-up dictation can still run.",
+        "Set ElevenLabs Key",
+        "Start with Local Fallback",
+      );
+      if (action === "Set ElevenLabs Key") {
+        return this.configureElevenLabsApiKey();
+      }
+      return action === "Start with Local Fallback";
+    }
+    const voiceConfiguration =
+      vscode.workspace.getConfiguration("chudvis.elevenLabs");
+    if (
+      !voiceConfiguration.get<boolean>("ttsEnabled", true) ||
+      voiceConfiguration
+        .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
+        .trim().length > 0
     ) {
       return true;
     }
     const action = await vscode.window.showWarningMessage(
-      "ElevenLabs is not configured. Wake-word realtime speech will be unavailable; gaze, gestures, and local thumbs-up dictation can still run.",
-      "Set ElevenLabs Key",
-      "Start with Local Fallback",
+      "ElevenLabs transcription is configured, but TTS needs a voice that is available to this account.",
+      "Choose Voice",
+      "Start without Spoken Feedback",
     );
-    if (action === "Set ElevenLabs Key") {
-      return this.configureElevenLabsApiKey();
+    if (action === "Choose Voice") {
+      await this.configureElevenLabsVoice();
+      return (
+        voiceConfiguration
+          .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
+          .trim().length > 0
+      );
     }
-    return action === "Start with Local Fallback";
+    return action === "Start without Spoken Feedback";
   }
 
   private async dispatch(notification: BridgeNotification): Promise<void> {
     if (notification.method === "diagnostic.event") {
       this.diagnostics.recordRemote(notification.params);
+      return;
+    }
+    if (notification.method === "runtime.ready") {
+      const detail = stringParam(notification.params, "message");
+      if (detail.length === 0 || detail.length > 500) {
+        throw new ProtocolError("Runtime readiness detail is invalid");
+      }
+      if (this.perception.activeMode === "ide") {
+        this.setControlsRunning(true);
+        this.report(detail);
+      }
       return;
     }
     const voice = parseChudvisInbound(notification);
@@ -800,37 +857,54 @@ class ExtensionRuntime implements vscode.Disposable {
   }
 
   private async startControls(allowEphemeralPort = false): Promise<void> {
-    if (!this.perception.calibrationReady()) {
-      const action = await vscode.window.showWarningMessage(
-        "Chudvis needs a native gaze calibration before controls can start.",
-        "Calibrate Gaze",
-      );
-      if (action === "Calibrate Gaze") {
-        await this.startRuntimeMode("calibrate");
-      }
+    if (this.controlsStarting || this.perception.activeMode === "ide") {
       return;
     }
-    const quality = this.perception.calibrationQuality();
-    if (quality?.poor === true) {
-      const action = await vscode.window.showWarningMessage(
-        `Current gaze calibration is low quality (median ${quality.medianErrorPx.toFixed(0)} px, p95 ${quality.p95ErrorPx.toFixed(0)} px).`,
-        "Recalibrate Gaze",
-        "Start Anyway",
-      );
-      if (action === "Recalibrate Gaze") {
-        await this.startRuntimeMode("calibrate");
-      }
-      if (action !== "Start Anyway") {
+    this.setControlsStarting(true);
+    let launched = false;
+    try {
+      if (!this.perception.calibrationReady()) {
+        const action = await vscode.window.showWarningMessage(
+          "Chudvis needs a native gaze calibration before controls can start.",
+          "Calibrate Gaze",
+        );
+        if (!this.controlsAreStarting()) {
+          return;
+        }
+        if (action === "Calibrate Gaze") {
+          await this.startRuntimeMode("calibrate");
+        }
         return;
       }
-    }
-    if (!(await this.confirmElevenLabsSetup())) {
-      return;
-    }
-    if (!(await this.startBridge(allowEphemeralPort))) {
-      return;
-    }
-    try {
+      const quality = this.perception.calibrationQuality();
+      if (quality?.poor === true) {
+        const action = await vscode.window.showWarningMessage(
+          `Current gaze calibration is low quality (median ${quality.medianErrorPx.toFixed(0)} px, p95 ${quality.p95ErrorPx.toFixed(0)} px).`,
+          "Recalibrate Gaze",
+          "Start Anyway",
+        );
+        if (!this.controlsAreStarting()) {
+          return;
+        }
+        if (action === "Recalibrate Gaze") {
+          await this.startRuntimeMode("calibrate");
+        }
+        if (action !== "Start Anyway") {
+          return;
+        }
+      }
+      if (
+        !(await this.confirmElevenLabsSetup()) ||
+        !this.controlsAreStarting()
+      ) {
+        return;
+      }
+      if (
+        !(await this.startBridge(allowEphemeralPort)) ||
+        !this.controlsAreStarting()
+      ) {
+        return;
+      }
       const bridge = this.bridge;
       if (bridge === undefined) {
         throw new Error(
@@ -844,12 +918,16 @@ class ExtensionRuntime implements vscode.Disposable {
         sessionToken: options.sessionToken,
       };
       await this.perception.start("ide", connection);
-      this.setControlsRunning(true);
+      launched = true;
     } catch (error: unknown) {
       const detail =
         error instanceof Error ? error.message : "unknown runtime error";
       this.report(detail);
       void vscode.window.showErrorMessage(detail);
+    } finally {
+      if (!launched) {
+        this.setControlsStarting(false);
+      }
     }
   }
 
@@ -889,7 +967,7 @@ class ExtensionRuntime implements vscode.Disposable {
   }
 
   private async toggleControls(): Promise<void> {
-    if (this.perception.activeMode === "ide") {
+    if (this.controlsStarting || this.perception.activeMode === "ide") {
       await this.stopControls();
     } else {
       await this.startControls(true);
@@ -928,8 +1006,19 @@ class ExtensionRuntime implements vscode.Disposable {
   }
 
   private setControlsRunning(running: boolean): void {
+    this.controlsStarting = false;
     this.status.setControls(running);
     this.sidebar.setControls(running);
+  }
+
+  private setControlsStarting(starting: boolean): void {
+    this.controlsStarting = starting;
+    this.status.setStarting(starting);
+    this.sidebar.setStarting(starting);
+  }
+
+  private controlsAreStarting(): boolean {
+    return this.controlsStarting;
   }
 
   public initialize(): void {

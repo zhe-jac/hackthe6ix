@@ -28,21 +28,32 @@ void test("edit proposal accepts exact bounded replacement operations", () => {
   );
 });
 
-void test("edit proposal rejects empty originals and oversized operation lists", () => {
-  assert.throws(
-    () =>
-      parseEditProposal({
-        edits: [
-          {
-            path: "src/parser.ts",
-            originalText: "",
-            replacementText: "x",
-            reason: "unsafe",
-          },
-        ],
-      }),
-    /originalText/u,
+void test("edit proposal accepts empty-file insertions", () => {
+  assert.deepEqual(
+    parseEditProposal({
+      edits: [
+        {
+          path: "test.py",
+          originalText: "",
+          replacementText: "for number in range(1, 11):\n    print(number)\n",
+          reason: "Populate the empty file",
+        },
+      ],
+    }),
+    {
+      edits: [
+        {
+          path: "test.py",
+          originalText: "",
+          replacementText: "for number in range(1, 11):\n    print(number)\n",
+          reason: "Populate the empty file",
+        },
+      ],
+    },
   );
+});
+
+void test("edit proposal rejects oversized operation lists", () => {
   assert.throws(
     () => parseEditProposal({ edits: Array.from({ length: 101 }, () => ({})) }),
     /between 1 and 100/u,

@@ -53,7 +53,7 @@ export function parseEditProposal(value: unknown): EditProposal {
         edit.originalText,
         `edit ${index + 1} originalText`,
         100_000,
-        false,
+        true,
       ),
       replacementText: boundedString(
         edit.replacementText,

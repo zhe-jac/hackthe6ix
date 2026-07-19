@@ -1,18 +1,7 @@
 import * as path from "node:path";
 
-const FORMAT_EXTENSIONS: Readonly<Record<string, string>> = {
-  css: ".css",
-  html: ".html",
-  javascript: ".js",
-  json: ".json",
-  markdown: ".md",
-  python: ".py",
-  text: ".txt",
-  typescript: ".ts",
-  yaml: ".yaml",
-  yml: ".yml",
-};
-const SUPPORTED_CREATE_EXTENSIONS = new Set(Object.values(FORMAT_EXTENSIONS));
+const FILE_REFERENCE =
+  /((?:[\p{L}\p{N}_$@+.-]+\/)*[\p{L}\p{N}_$@+.-]+\.(?:css|html|js|json|md|py|txt|ts|ya?ml))(?=$|[\s)\]}'"`,;:!?])/giu;
 
 function stripOuterQuotes(value: string): string {
   const trimmed = value.trim();
@@ -54,30 +43,19 @@ export function normalizeSpokenFileQuery(value: string): string {
   return normalizeSpokenPath(value).toLowerCase();
 }
 
-export function requestedFilePath(
-  format: string | undefined,
-  value: string,
-): string {
-  const requested = normalizeSpokenPath(value);
-  const extension =
-    format === undefined ? undefined : FORMAT_EXTENSIONS[format.toLowerCase()];
-  if (
-    extension !== undefined &&
-    path.posix.extname(requested.replaceAll("\\", "/")).length === 0
-  ) {
-    return `${requested}${extension}`;
+export function referencedFileQueries(value: string): readonly string[] {
+  const normalized = normalizeSpokenPath(value);
+  const queries: string[] = [];
+  const seen = new Set<string>();
+  for (const match of normalized.matchAll(FILE_REFERENCE)) {
+    const query = match[1];
+    const key = query?.toLowerCase();
+    if (query !== undefined && key !== undefined && !seen.has(key)) {
+      seen.add(key);
+      queries.push(query);
+    }
   }
-  return requested;
-}
-
-export function isSupportedCreateFilePath(value: string): boolean {
-  const normalized = normalizeSpokenPath(value).replaceAll("\\", "/");
-  if (normalized.length === 0 || /\s/u.test(normalized)) {
-    return false;
-  }
-  return SUPPORTED_CREATE_EXTENSIONS.has(
-    path.posix.extname(normalized).toLowerCase(),
-  );
+  return queries;
 }
 
 function editDistance(left: string, right: string): number {

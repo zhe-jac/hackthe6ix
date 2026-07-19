@@ -8,7 +8,10 @@ export function uniqueTextRange(
   originalText: string,
 ): OffsetRange {
   if (originalText.length === 0) {
-    throw new Error("originalText must not be empty");
+    if (text.length === 0) {
+      return { startOffset: 0, endOffset: 0 };
+    }
+    throw new Error("empty originalText is valid only for an empty file");
   }
   const startOffset = text.indexOf(originalText);
   if (startOffset < 0 || text.slice(startOffset + 1).includes(originalText)) {
@@ -30,7 +33,10 @@ export function assertNonOverlapping(
     if (
       previous !== undefined &&
       current !== undefined &&
-      previous.endOffset > current.startOffset
+      (previous.endOffset > current.startOffset ||
+        (previous.startOffset === previous.endOffset &&
+          current.startOffset === current.endOffset &&
+          previous.startOffset === current.startOffset))
     ) {
       throw new Error(`Proposed edits overlap in '${label}'`);
     }

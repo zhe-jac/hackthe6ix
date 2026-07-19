@@ -25,6 +25,7 @@ interface HistoryEntry {
 
 interface SidebarState {
   readonly controlsRunning: boolean;
+  readonly controlsStarting: boolean;
   readonly backboardStatus: string;
   readonly elevenLabsStatus: string;
   readonly elevenLabsVoiceStatus: string;
@@ -42,6 +43,7 @@ interface SidebarState {
 
 const INITIAL_STATE: SidebarState = {
   controlsRunning: false,
+  controlsStarting: false,
   backboardStatus: "Checking…",
   elevenLabsStatus: "Checking…",
   elevenLabsVoiceStatus: "Checking…",
@@ -116,9 +118,24 @@ export class ChudvisSidebar
     this.state = {
       ...this.state,
       controlsRunning: running,
+      controlsStarting: false,
       voiceState: running ? "ready" : "paused",
       detail: running
         ? "Controls are on. Say “Chudvis” to begin."
+        : "Controls are off. Start them here or use the keyboard shortcut.",
+      partial: "",
+    };
+    void this.publish();
+  }
+
+  public setStarting(starting: boolean): void {
+    this.state = {
+      ...this.state,
+      controlsRunning: false,
+      controlsStarting: starting,
+      voiceState: starting ? "connecting" : "paused",
+      detail: starting
+        ? "Starting camera, microphone, and backend…"
         : "Controls are off. Start them here or use the keyboard shortcut.",
       partial: "",
     };
@@ -327,7 +344,7 @@ export class ChudvisSidebar
           <td>
             <div class="guide-action"><kbd>${shortcut}</kbd><span>Start or stop all controls.</span></div>
             <div class="guide-action"><strong>Look at a target</strong><span>Move the pointer with gaze.</span></div>
-            <div class="guide-action"><strong>Say “Chudvis,” then speak</strong><span>Navigate, create a file, ask, or request an edit.</span></div>
+            <div class="guide-action"><strong>Say “Chudvis,” then speak</strong><span>Try “open test.py,” “go to a symbol,” create a file, ask, or request an edit.</span></div>
           </td>
         </tr>
         <tr>
@@ -367,11 +384,11 @@ export class ChudvisSidebar
     window.addEventListener('message', (event) => {
       if (!event.data || event.data.type !== 'state') return;
       const state = event.data.state;
-      const visibleState = state.controlsRunning ? state.voiceState[0].toUpperCase() + state.voiceState.slice(1) : 'Off';
+      const visibleState = state.controlsStarting ? 'Activating CHUD…' : state.controlsRunning ? state.voiceState[0].toUpperCase() + state.voiceState.slice(1) : 'Off';
       document.getElementById('state').textContent = visibleState;
-      document.getElementById('stateRow').className = 'state ' + (state.controlsRunning ? state.voiceState : 'paused');
+      document.getElementById('stateRow').className = 'state ' + (state.controlsStarting ? 'connecting' : state.controlsRunning ? state.voiceState : 'paused');
       document.getElementById('detail').textContent = state.detail;
-      document.getElementById('toggleControls').textContent = state.controlsRunning ? 'Stop Controls' : 'Start Controls';
+      document.getElementById('toggleControls').textContent = state.controlsRunning || state.controlsStarting ? 'Stop Controls' : 'Start Controls';
       document.getElementById('backboardStatus').textContent = state.backboardStatus;
       document.getElementById('elevenLabsStatus').textContent = state.elevenLabsStatus;
       document.getElementById('elevenLabsVoiceStatus').textContent = state.elevenLabsVoiceStatus;

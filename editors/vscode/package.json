@@ -2,7 +2,7 @@
   "name": "chudvis-vscode",
   "displayName": "Chudvis",
   "description": "Wake-word voice navigation, explanations, and bounded code edits for VS Code.",
-  "version": "0.3.10",
+  "version": "0.3.15",
   "publisher": "chudvis",
   "license": "UNLICENSED",
   "repository": {
@@ -224,6 +224,19 @@
           "maximum": 180000,
           "description": "Timeout for each Backboard request."
         },
+        "chudvis.voice.additionalCommands": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "maxItems": 50,
+          "uniqueItems": true,
+          "default": [],
+          "scope": "machine",
+          "description": "Additional installed VS Code command IDs that Chudvis may offer to its voice-action model. Commands run without arguments and always require native confirmation."
+        },
         "chudvis.edits.maxChangeCharacters": {
           "type": "number",
           "default": 100000,
@@ -239,11 +252,10 @@
         },
         "chudvis.elevenLabs.voiceId": {
           "type": "string",
-          "default": "21m00Tcm4TlvDq8ikWAM",
-          "minLength": 5,
+          "default": "",
           "maxLength": 100,
           "scope": "machine",
-          "description": "ElevenLabs voice ID used for spoken Chudvis feedback. Choose it from the Chudvis sidebar or enter an ID here."
+          "description": "ElevenLabs voice ID used for spoken Chudvis feedback. Voice availability depends on the account, so choose one from the Chudvis sidebar or enter an ID here."
         },
         "chudvis.runtime.preview": {
           "type": "boolean",

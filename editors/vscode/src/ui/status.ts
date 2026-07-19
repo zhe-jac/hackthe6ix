@@ -9,6 +9,7 @@ export class StatusPresenter implements vscode.Disposable {
   );
   private bridgeConnected = false;
   private controlsRunning = false;
+  private controlsStarting = false;
   private detail = "Use Toggle Controls or click here to start Chudvis";
   private paused = false;
   private voiceState: VoiceState | undefined;
@@ -33,9 +34,21 @@ export class StatusPresenter implements vscode.Disposable {
 
   public setControls(running: boolean): void {
     this.controlsRunning = running;
+    this.controlsStarting = false;
     if (!running) {
       this.paused = false;
       this.voiceState = undefined;
+    }
+    this.render();
+  }
+
+  public setStarting(starting: boolean): void {
+    this.controlsStarting = starting;
+    if (starting) {
+      this.controlsRunning = false;
+      this.paused = false;
+      this.voiceState = undefined;
+      this.detail = "Starting camera, microphone, and backend…";
     }
     this.render();
   }
@@ -54,9 +67,11 @@ export class StatusPresenter implements vscode.Disposable {
   }
 
   private render(): void {
-    const connection = this.bridgeConnected
-      ? "$(radio-tower)"
-      : "$(debug-disconnect)";
+    const connection = this.controlsStarting
+      ? "$(sync~spin)"
+      : this.bridgeConnected
+        ? "$(radio-tower)"
+        : "$(debug-disconnect)";
     const voiceLabels: Readonly<Record<VoiceState, string>> = {
       ready: "Ready",
       connecting: "Connecting…",
@@ -67,17 +82,19 @@ export class StatusPresenter implements vscode.Disposable {
       error: "Error",
       paused: "Paused",
     };
-    const mode = !this.controlsRunning
-      ? "Off"
-      : this.paused
-        ? "Paused"
-        : this.voiceState === undefined
-          ? this.bridgeConnected
-            ? "Ready"
-            : "Waiting"
-          : voiceLabels[this.voiceState];
+    const mode = this.controlsStarting
+      ? "Activating CHUD…"
+      : !this.controlsRunning
+        ? "Off"
+        : this.paused
+          ? "Paused"
+          : this.voiceState === undefined
+            ? this.bridgeConnected
+              ? "Ready"
+              : "Waiting"
+            : voiceLabels[this.voiceState];
     this.item.text = `${connection} Chudvis: ${mode}`;
-    this.item.tooltip = `${this.detail}\n\nClick to ${this.controlsRunning ? "stop" : "start"} Chudvis controls.`;
+    this.item.tooltip = `${this.detail}\n\nClick to ${this.controlsRunning || this.controlsStarting ? "stop" : "start"} Chudvis controls.`;
     this.item.backgroundColor =
       this.voiceState === "error"
         ? new vscode.ThemeColor("statusBarItem.errorBackground")

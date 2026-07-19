@@ -19,3 +19,8 @@ def test_shared_protocol_schema_matches_notification_envelope() -> None:
         == "voice.complete"
         for rule in schema["allOf"]
     )
+    assert any(
+        rule.get("if", {}).get("properties", {}).get("method", {}).get("const")
+        == "runtime.ready"
+        for rule in schema["allOf"]
+    )

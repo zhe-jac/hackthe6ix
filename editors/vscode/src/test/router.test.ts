@@ -1,81 +1,160 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { routeVoiceRequest } from "../voice/router";
+import type { VoiceEditorCommand } from "../voice/editorCommandCatalog";
+import { voiceRouteFromToolCall, voiceRoutingTools } from "../voice/router";
 
-void test("router handles deterministic commands before model requests", () => {
-  assert.deepEqual(routeVoiceRequest("open file config.py"), {
-    kind: "open",
-    query: "config.py",
-  });
-  assert.deepEqual(routeVoiceRequest("can you open plotform dot pi"), {
-    kind: "open",
-    query: "plotform dot pi",
-  });
+const EDITOR_COMMAND: VoiceEditorCommand = {
+  id: "workbench.action.openSettings",
+  title: "Open Settings",
+  description: "Open the graphical VS Code Settings editor.",
+  requiresConfirmation: false,
+};
+
+void test("the model is offered every supported voice action", () => {
   assert.deepEqual(
-    routeVoiceRequest('Create a new markdown file named "Hello."'),
-    { kind: "create", path: "Hello.md" },
+    voiceRoutingTools([]).map((tool) => tool.function.name),
+    [
+      "open_workspace_file",
+      "create_workspace_files",
+      "go_to_workspace_symbol",
+      "show_symbol_references",
+      "undo_last_edit",
+      "cancel_current_request",
+      "answer_workspace_question",
+      "edit_workspace",
+      "unsupported_request",
+    ],
   );
-  assert.deepEqual(routeVoiceRequest("Make a Python file called test.py."), {
-    kind: "create",
-    path: "test.py",
-  });
-  assert.deepEqual(
-    routeVoiceRequest("could you generate a Python script called checks"),
-    {
-      kind: "create",
-      path: "checks.py",
-    },
-  );
-  assert.deepEqual(routeVoiceRequest("make me tools slash verify dot P Y"), {
-    kind: "create",
-    path: "tools/verify.py",
-  });
-  assert.deepEqual(routeVoiceRequest("go to function parseConfig"), {
-    kind: "symbol",
-    query: "parseConfig",
-  });
-  assert.deepEqual(routeVoiceRequest("show references to this"), {
-    kind: "references",
-    query: undefined,
-  });
-  assert.deepEqual(routeVoiceRequest("undo last edit"), { kind: "undo" });
-  assert.deepEqual(routeVoiceRequest("never mind"), { kind: "cancel" });
 });
 
-void test("router separates questions, edits, and unsupported requests", () => {
-  assert.deepEqual(routeVoiceRequest("what should I change in this function"), {
-    kind: "question",
-    instruction: "what should I change in this function",
-  });
-  assert.deepEqual(routeVoiceRequest("tell me about this parser"), {
-    kind: "question",
-    instruction: "tell me about this parser",
-  });
-  assert.deepEqual(routeVoiceRequest("please fix the parser"), {
-    kind: "edit",
-    instruction: "please fix the parser",
-  });
-  assert.deepEqual(routeVoiceRequest("create a helper function"), {
-    kind: "edit",
-    instruction: "create a helper function",
-  });
-  assert.deepEqual(routeVoiceRequest("make this function return early"), {
-    kind: "edit",
-    instruction: "make this function return early",
-  });
+void test("eligible editor commands are offered as validated model choices", () => {
+  const tools = voiceRoutingTools([EDITOR_COMMAND]);
   assert.deepEqual(
-    routeVoiceRequest(
-      "create a simple for loop that counts from one to 10 and prints it in the terminal in test.py",
-    ),
+    tools.map((tool) => tool.function.name),
+    [
+      "open_workspace_file",
+      "create_workspace_files",
+      "go_to_workspace_symbol",
+      "show_symbol_references",
+      "undo_last_edit",
+      "cancel_current_request",
+      "answer_workspace_question",
+      "edit_workspace",
+      "execute_editor_command",
+      "unsupported_request",
+    ],
+  );
+  const commandTool = tools.find(
+    (tool) => tool.function.name === "execute_editor_command",
+  );
+  assert.deepEqual(
+    (
+      commandTool?.function.parameters.properties as
+        Record<string, unknown> | undefined
+    )?.command,
     {
-      kind: "edit",
-      instruction:
-        "create a simple for loop that counts from one to 10 and prints it in the terminal in test.py",
+      type: "string",
+      enum: ["workbench.action.openSettings"],
     },
   );
-  assert.deepEqual(routeVoiceRequest("do something with this"), {
-    kind: "unsupported",
-    instruction: "do something with this",
+  assert.deepEqual(
+    voiceRouteFromToolCall(
+      "execute_editor_command",
+      { command: EDITOR_COMMAND.id },
+      "open settings",
+      [EDITOR_COMMAND],
+    ),
+    { kind: "editorCommand", command: EDITOR_COMMAND },
+  );
+});
+
+void test("model tool calls become executable local routes", () => {
+  assert.deepEqual(
+    voiceRouteFromToolCall(
+      "open_workspace_file",
+      { query: "src/platform.py" },
+      "take me to platform dot py",
+    ),
+    { kind: "open", query: "src/platform.py" },
+  );
+  assert.deepEqual(
+    voiceRouteFromToolCall(
+      "create_workspace_files",
+      { paths: ["test.py", "devpost.md"] },
+      "make the files",
+    ),
+    { kind: "createMany", paths: ["test.py", "devpost.md"] },
+  );
+  assert.deepEqual(
+    voiceRouteFromToolCall(
+      "go_to_workspace_symbol",
+      { query: "parseConfig" },
+      "find the config parser",
+    ),
+    { kind: "symbol", query: "parseConfig" },
+  );
+  assert.deepEqual(
+    voiceRouteFromToolCall("show_symbol_references", {}, "where is this used"),
+    { kind: "references", query: undefined },
+  );
+});
+
+void test("question and edit routes preserve the user's exact request", () => {
+  const question = "Would changing this parser break callers?";
+  const edit = "Make this function return early";
+
+  assert.deepEqual(
+    voiceRouteFromToolCall("answer_workspace_question", {}, question),
+    { kind: "question", instruction: question },
+  );
+  assert.deepEqual(voiceRouteFromToolCall("edit_workspace", {}, edit), {
+    kind: "edit",
+    instruction: edit,
   });
+});
+
+void test("the model can explicitly decline an unsupported request", () => {
+  assert.deepEqual(
+    voiceRouteFromToolCall(
+      "unsupported_request",
+      { reason: "No available IDE action matches the request." },
+      "do something with this",
+    ),
+    {
+      kind: "unsupported",
+      instruction: "do something with this",
+      reason: "No available IDE action matches the request.",
+    },
+  );
+});
+
+void test("invalid model action arguments are rejected", () => {
+  assert.throws(
+    () => voiceRouteFromToolCall("open_workspace_file", {}, "open it"),
+    /missing 'query'/u,
+  );
+  assert.throws(
+    () =>
+      voiceRouteFromToolCall(
+        "create_workspace_files",
+        { paths: [] },
+        "create files",
+      ),
+    /invalid 'paths'/u,
+  );
+  assert.throws(
+    () => voiceRouteFromToolCall("run_shell", {}, "run tests"),
+    /unknown voice action/u,
+  );
+  assert.throws(
+    () =>
+      voiceRouteFromToolCall(
+        "execute_editor_command",
+        { command: "workbench.action.terminal.sendSequence" },
+        "run a terminal command",
+        [EDITOR_COMMAND],
+      ),
+    /ineligible editor command/u,
+  );
 });

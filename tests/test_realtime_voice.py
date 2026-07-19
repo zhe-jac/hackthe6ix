@@ -8,10 +8,13 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 
 from chudvis.core.config import VoiceSettings
 from chudvis.speech.realtime_voice import (
     AudioCaptureStatus,
+    ElevenLabsTtsSpeaker,
+    SpokenFeedbackUnavailableError,
     VoiceEvent,
     VoiceEventType,
     VoiceSession,
@@ -80,13 +83,16 @@ class FakeInputStream:
 
 
 class FakeSpeaker:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, unavailable: bool = False) -> None:
         self.fail = fail
+        self.unavailable = unavailable
         self.spoken: list[str] = []
 
     def speak(self, text: str, cancelled: threading.Event) -> None:
         assert not cancelled.is_set()
         self.spoken.append(text)
+        if self.unavailable:
+            raise SpokenFeedbackUnavailableError("Spoken feedback disabled for this session")
         if self.fail:
             raise RuntimeError("speaker failed")
 
@@ -153,6 +159,49 @@ def test_float_audio_is_clipped_and_encoded_as_little_endian_pcm16() -> None:
     values = np.frombuffer(encoded, dtype="<i2").tolist()
 
     assert values == [-32767, -32767, 0, 16383, 32767, 32767]
+
+
+def test_elevenlabs_tts_buffers_pcm_samples_split_across_http_chunks(
+    monkeypatch: Any,
+) -> None:
+    writes: list[bytes] = []
+
+    class FakeResponse:
+        status_code = 200
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def iter_content(self, chunk_size: int) -> list[bytes]:
+            assert chunk_size == 4096
+            return [b"\x01", b"\x02\x03", b"\x04"]
+
+    class FakeOutput:
+        def __enter__(self) -> FakeOutput:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def write(self, data: bytes) -> None:
+            assert len(data) % 2 == 0
+            writes.append(data)
+
+    fake_requests = SimpleNamespace(post=lambda *_args, **_kwargs: FakeResponse())
+    fake_sounddevice = SimpleNamespace(RawOutputStream=lambda **_kwargs: FakeOutput())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sounddevice)
+
+    speaker = ElevenLabsTtsSpeaker(VoiceSettings(), "test-key", "test-voice")
+    speaker.speak("Created test.py", threading.Event())
+
+    assert writes == [b"\x01\x02", b"\x03\x04"]
 
 
 def test_isolated_capture_worker_uses_blocking_contiguous_reads(monkeypatch: Any) -> None:
@@ -363,6 +412,34 @@ def test_audio_capture_loss_is_counted_and_reported() -> None:
         harness.close()
 
 
+def test_audio_is_discarded_without_loss_warnings_while_request_is_processing() -> None:
+    harness = Harness(queue_chunks=2)
+    try:
+        harness.stream.push(1.0)
+        harness.events_until(lambda events: state_seen(events, VoiceState.LISTENING))
+        harness.transport.inbound.put(
+            {"message_type": "committed_transcript", "text": "edit test.py"}
+        )
+        events = harness.events_until(
+            lambda values: any(event.type == VoiceEventType.REQUEST for event in values)
+        )
+        request_id = next(
+            event.request_id for event in events if event.type == VoiceEventType.REQUEST
+        )
+        assert request_id is not None
+
+        for index in range(20):
+            harness.stream.push(index / 100)
+        sleep(0.05)
+
+        assert harness.session.dropped_audio_chunks == 0
+        assert not any("Microphone lost" in event.detail for event in harness.session.poll())
+        assert harness.session.complete(request_id, "failed")
+        harness.events_until(lambda values: state_seen(values, VoiceState.READY))
+    finally:
+        harness.close()
+
+
 def test_pause_stops_wake_detection_until_explicit_resume() -> None:
     harness = Harness()
     try:
@@ -408,3 +485,84 @@ def test_tts_failure_does_not_undo_completion_or_prevent_rearming() -> None:
         assert harness.session.state == VoiceState.READY
     finally:
         harness.close()
+
+
+def test_unavailable_tts_disables_spoken_feedback_without_erroring_completion() -> None:
+    speaker = FakeSpeaker(unavailable=True)
+    harness = Harness(speaker=speaker)
+    try:
+        harness.stream.push(1.0)
+        harness.events_until(lambda events: state_seen(events, VoiceState.LISTENING))
+        harness.transport.inbound.put(
+            {"message_type": "committed_transcript", "text": "create test.py"}
+        )
+        events = harness.events_until(
+            lambda values: any(event.type == VoiceEventType.REQUEST for event in values)
+        )
+        request_id = next(
+            event.request_id for event in events if event.type == VoiceEventType.REQUEST
+        )
+        assert request_id is not None
+
+        assert harness.session.complete(request_id, "succeeded", "Created test.py")
+        completed = harness.events_until(lambda values: state_seen(values, VoiceState.READY))
+
+        assert not state_seen(completed, VoiceState.ERROR)
+        assert any(
+            event.state == VoiceState.READY and "disabled" in event.detail for event in completed
+        )
+        assert not harness.session.speak("This should remain visual only")
+    finally:
+        harness.close()
+
+
+def test_elevenlabs_tts_surfaces_payment_detail_without_exposing_api_key(
+    monkeypatch: Any,
+) -> None:
+    class PaymentRequiredResponse:
+        status_code = 402
+        headers = {"request-id": "tts-request-123"}
+
+        def __enter__(self) -> PaymentRequiredResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def json(self) -> object:
+            return {
+                "detail": {
+                    "status": "payment_required",
+                    "message": "The selected voice requires a paid plan.",
+                }
+            }
+
+    captured: dict[str, object] = {}
+
+    def post(url: str, **kwargs: object) -> PaymentRequiredResponse:
+        captured["url"] = url
+        captured.update(kwargs)
+        return PaymentRequiredResponse()
+
+    monkeypatch.setitem(sys.modules, "requests", SimpleNamespace(post=post))
+    monkeypatch.setitem(sys.modules, "sounddevice", SimpleNamespace())
+    speaker = ElevenLabsTtsSpeaker(
+        VoiceSettings(elevenlabs_tts_voice_id="available-voice"),
+        "secret-api-key",
+    )
+
+    with pytest.raises(SpokenFeedbackUnavailableError) as raised:
+        speaker.speak("Done.", threading.Event())
+
+    message = str(raised.value)
+    assert "HTTP 402" in message
+    assert "payment_required: The selected voice requires a paid plan." in message
+    assert "tts-request-123" in message
+    assert "secret-api-key" not in message
+    assert captured["url"] == (
+        "https://api.elevenlabs.io/v1/text-to-speech/available-voice/stream?output_format=pcm_16000"
+    )
+    assert captured["headers"] == {
+        "xi-api-key": "secret-api-key",
+        "Content-Type": "application/json",
+    }

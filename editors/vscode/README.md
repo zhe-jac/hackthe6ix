@@ -2,13 +2,18 @@
 
 This extension owns the complete Chudvis IDE-mode lifecycle. It launches its packaged native Python
 runtime for local gaze, two-hand gestures, “Chudvis” wake detection, and activated ElevenLabs
-speech I/O. In-process extension services handle deterministic navigation, stream stateless
-Backboard explanations, validate exact-text edit proposals, open native diffs for scope expansion,
-and provide guarded Undo.
+speech I/O. A tool-capable Backboard model selects and parameterizes each voice action. In-process
+extension services execute bounded navigation, stream stateless Backboard explanations, validate
+exact-text edit proposals, open native diffs for scope expansion, and provide guarded Undo.
 
-Explicit voice commands can safely create a new workspace text file without Backboard, and
-open-file commands normalize spoken extensions and tolerate small transcription errors. Creation
-rejects secret/excluded paths and existing files; ambiguous open matches use a native Quick Pick.
+Voice actions can safely create new workspace text files, and open-file execution normalizes spoken
+extensions and tolerates small transcription errors. Creation rejects secret/excluded paths and
+existing files; ambiguous open matches use a native Quick Pick. Intent selection and command
+arguments come from a structured model tool call, not a keyword or regular-expression router.
+Safe no-argument workbench commands are discovered from the active VS Code command registry, so
+requests such as opening Settings, opening a terminal, showing the Command Palette, and switching
+views execute as native VS Code actions. Additional installed-extension command IDs may be opted in
+with `chudvis.voice.additionalCommands`; they require native confirmation before every execution.
 
 Use **Chudvis: Calibrate Gaze**, **Chudvis: Test Tracking Safely**, **Chudvis: Start Gaze, Gesture,
 and Voice Controls**, and **Chudvis: Stop Gaze, Gesture, and Voice Controls**. Activation leaves the

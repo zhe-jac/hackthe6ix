@@ -58,5 +58,6 @@ def test_legacy_voice_config_loads_with_streaming_defaults(tmp_path) -> None:
     assert loaded.voice.model == "base.en"
     assert loaded.voice.wake_word_enabled
     assert loaded.voice.elevenlabs_stt_model == "scribe_v2_realtime"
+    assert loaded.voice.elevenlabs_tts_voice_id == ""
     assert loaded.voice.audio_chunk_ms == 100
     assert loaded.voice.vad_silence_seconds == 1.2

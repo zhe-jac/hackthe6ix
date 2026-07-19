@@ -78,6 +78,7 @@ class ChudvisApplication:
             mirror=self.config.mirror_camera,
         )
         smoother = AdaptiveGazeSmoother(
+            median_window=self.config.gaze.smoothing_median_window,
             min_cutoff=self.config.gaze.smoothing_min_cutoff,
             beta=self.config.gaze.smoothing_beta,
             derivative_cutoff=self.config.gaze.smoothing_derivative_cutoff,
@@ -110,8 +111,8 @@ class ChudvisApplication:
                 ) as tracker,
             ):
                 while self._running:
-                    now = monotonic()
                     frame = camera.read()
+                    now = camera.latest_frame_at
                     result = tracker.process(frame, now)
 
                     if result.gaze_features is not None:

@@ -30,6 +30,15 @@ def dense_grid_targets(
     return tuple(targets)
 
 
+def drift_resistant_target_order(targets: tuple[Point, ...]) -> tuple[Point, ...]:
+    """Break the correlation between capture time and a target's screen position."""
+    if len(targets) < 2:
+        return targets
+    generator = np.random.default_rng(0xC0D15)
+    order = generator.permutation(len(targets))
+    return tuple(targets[int(index)] for index in order)
+
+
 VALIDATION_TARGETS = (
     Point(0.20, 0.20),
     Point(0.80, 0.80),
@@ -143,6 +152,66 @@ def _draw_message(canvas: Any, title: str, lines: tuple[str, ...]) -> None:
         )
 
 
+def _warm_up_tracking(
+    camera: OpenCVCamera,
+    tracker: MediaPipeTracker,
+    screen_size: tuple[int, int],
+    window: str,
+    minimum_confidence: float,
+    seconds: float = 2.5,
+) -> CaptureStats:
+    """Let camera auto-controls and temporal landmark tracking settle before capture."""
+    import cv2
+
+    width, height = screen_size
+    began = monotonic()
+    processed_frames = 0
+    face_frames = 0
+    usable_frames = 0
+    while monotonic() - began < seconds:
+        frame = camera.read()
+        result = tracker.process(frame, camera.latest_frame_at)
+        processed_frames += 1
+        face_frames += int(result.face_landmarks is not None)
+        confidence = result.gaze_confidence if result.gaze_features is not None else 0.0
+        usable_frames += int(confidence >= minimum_confidence)
+
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        progress = min((monotonic() - began) / seconds, 1.0)
+        _draw_message(
+            canvas,
+            "Stabilizing camera and eye tracking...",
+            (
+                "Sit comfortably and look at the center dot.",
+                f"Eye features: {'READY' if confidence >= minimum_confidence else 'WAITING'}  "
+                f"{confidence:.2f}",
+            ),
+        )
+        center = (width // 2, height // 2 + 80)
+        cv2.circle(canvas, center, 10, (255, 255, 255), -1)
+        cv2.rectangle(
+            canvas,
+            (width // 2 - 180, height // 2 + 130),
+            (width // 2 - 180 + round(360 * progress), height // 2 + 142),
+            (80, 220, 110),
+            -1,
+        )
+        if not window_is_open(cv2, window):
+            raise CalibrationCancelled("Calibration window closed")
+        cv2.imshow(window, canvas)
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:
+            raise CalibrationCancelled("Calibration cancelled")
+
+    minimum_usable = max(round(processed_frames * 0.50), 1)
+    if usable_frames < minimum_usable:
+        raise RuntimeError(
+            "Eye tracking was not consistently ready during camera warm-up. "
+            "Move closer, use even frontal lighting, and run `chudvis test`."
+        )
+    return CaptureStats(processed_frames, face_frames)
+
+
 def _capture_targets(
     camera: OpenCVCamera,
     tracker: MediaPipeTracker,
@@ -173,7 +242,7 @@ def _capture_targets(
             confidence = 0.0
             while monotonic() - began < settle_seconds + sample_seconds:
                 frame = camera.read()
-                result = tracker.process(frame)
+                result = tracker.process(frame, camera.latest_frame_at)
                 processed_frames += 1
                 face_frames += int(result.face_landmarks is not None)
                 confidence = result.gaze_confidence if result.gaze_features is not None else 0.0
@@ -285,12 +354,19 @@ def run_calibration(
     cv2.setWindowProperty(window, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
     try:
+        warmup_stats = _warm_up_tracking(
+            camera,
+            tracker,
+            screen_size,
+            window,
+            minimum_confidence,
+        )
         training_groups, training_stats = _capture_targets(
             camera,
             tracker,
             screen_size,
             window,
-            dense_grid_targets(grid_size),
+            drift_resistant_target_order(dense_grid_targets(grid_size)),
             "DENSE CALIBRATION",
             settle_seconds,
             sample_seconds,
@@ -323,8 +399,14 @@ def run_calibration(
     finally:
         close_window(cv2, window)
 
-    total_frames = training_stats.processed_frames + validation_stats.processed_frames
-    total_face_frames = training_stats.face_frames + validation_stats.face_frames
+    total_frames = (
+        warmup_stats.processed_frames
+        + training_stats.processed_frames
+        + validation_stats.processed_frames
+    )
+    total_face_frames = (
+        warmup_stats.face_frames + training_stats.face_frames + validation_stats.face_frames
+    )
     if total_frames and total_face_frames / total_frames < 0.80:
         print(
             "Warning: face tracking was intermittent during calibration; better lighting or "

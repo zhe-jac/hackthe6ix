@@ -73,6 +73,7 @@ class DiagnosticDashboard:
         )
         if profile is not None:
             smoother = AdaptiveGazeSmoother(
+                median_window=config.gaze.smoothing_median_window,
                 min_cutoff=config.gaze.smoothing_min_cutoff,
                 beta=config.gaze.smoothing_beta,
                 derivative_cutoff=config.gaze.smoothing_derivative_cutoff,
@@ -81,12 +82,14 @@ class DiagnosticDashboard:
             )
             self.gaze = GazeEstimator(profile, smoother)
         self.last_gaze: GazeSample | None = None
+        self.last_effective_gaze_confidence = 0.0
         self.last_metrics: GestureMetrics | None = None
         self.notices: deque[DiagnosticNotice] = deque(maxlen=7)
         self.frames = 0
         self.face_frames = 0
         self.hand_frames = 0
         self.gaze_frames = 0
+        self.dropped_camera_frames = 0
         self.completed_at: dict[str, float | None] = {key: None for key, *_ in _PRACTICE_CARDS}
         self.full_gaze_overlay = True
         self._screen_size: tuple[int, int] | None = None
@@ -147,9 +150,12 @@ class DiagnosticDashboard:
                 result.gaze_confidence,
                 timestamp,
             )
+            self.last_effective_gaze_confidence = sample.confidence
             if self.gaze_gate.accepts(sample):
                 self.last_gaze = sample
                 self.gaze_frames += 1
+        elif result.gaze_features is None:
+            self.last_effective_gaze_confidence = 0.0
         if (
             self.last_gaze
             and timestamp - self.last_gaze.timestamp > self.config.gaze.max_sample_age_seconds
@@ -341,7 +347,8 @@ class DiagnosticDashboard:
                 canvas,
                 f"Features: {len(result.gaze_features.values) if result.gaze_features else 486}  "
                 f"eye openness={result.eye_aspect_ratio:.3f}  "
-                f"confidence={result.gaze_confidence:.2f}",
+                f"landmarks={result.gaze_confidence:.2f}  "
+                f"calibrated={self.last_effective_gaze_confidence:.2f}",
                 (x, y),
                 (175, 175, 175),
                 0.48,
@@ -373,6 +380,14 @@ class DiagnosticDashboard:
         )
         y += line
         self._put(canvas, f"Camera processing: {fps:.1f} FPS", (x, y))
+        y += line
+        self._put(
+            canvas,
+            f"Stale camera frames discarded: {self.dropped_camera_frames}",
+            (x, y),
+            (175, 175, 175),
+            0.49,
+        )
         y += line
         self._put(
             canvas,
@@ -607,10 +622,11 @@ def run_diagnostics(
             ) as tracker,
         ):
             while True:
-                now = monotonic()
                 frame = camera.read()
+                now = camera.latest_frame_at
                 result = tracker.process(frame, now)
                 dashboard.update(result, now)
+                dashboard.dropped_camera_frames = camera.dropped_frames
                 elapsed = max(now - last_frame, 1e-6)
                 instant_fps = 1.0 / elapsed
                 fps = instant_fps if fps == 0 else fps * 0.9 + instant_fps * 0.1

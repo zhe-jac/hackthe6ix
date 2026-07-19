@@ -2,7 +2,7 @@
   "name": "chudvis-vscode",
   "displayName": "Chudvis",
   "description": "Wake-word voice navigation, explanations, and bounded code edits for VS Code.",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "chudvis",
   "license": "UNLICENSED",
   "repository": {

@@ -6,6 +6,10 @@ speech I/O. In-process extension services handle deterministic navigation, strea
 Backboard explanations, validate exact-text edit proposals, open native diffs for scope expansion,
 and provide guarded Undo.
 
+Explicit voice commands can safely create a new workspace text file without Backboard, and
+open-file commands normalize spoken extensions and tolerate small transcription errors. Creation
+rejects secret/excluded paths and existing files; ambiguous open matches use a native Quick Pick.
+
 Use **Chudvis: Calibrate Gaze**, **Chudvis: Test Tracking Safely**, **Chudvis: Start Gaze, Gesture,
 and Voice Controls**, and **Chudvis: Stop Gaze, Gesture, and Voice Controls**. Activation leaves the
 runtime off until the toggle shortcut, status item, or an explicit Start command is used. A separate

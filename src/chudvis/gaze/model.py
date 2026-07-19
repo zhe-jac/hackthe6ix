@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from math import hypot, pi
@@ -13,10 +14,13 @@ from chudvis.core.config import default_config_dir
 from chudvis.core.events import GazeFeatures, GazeSample, Point
 from chudvis.gaze.features import FEATURE_COUNT as HEAD_NORMALIZED_FEATURE_COUNT
 
-PROFILE_VERSION = 3
+PROFILE_VERSION = 4
 FEATURE_BACKEND = "head_normalized_v1"
 LINEAR_MODEL = "linear_ridge"
 KERNEL_MODEL = "rbf_kernel_ridge"
+FEATURE_SCALE_FLOOR = 1e-3
+FEATURE_CLIP = 8.0
+FEATURE_HOLD_CONFIDENCE = 0.5
 
 
 @dataclass(slots=True)
@@ -48,6 +52,7 @@ class CalibrationProfile:
     validation_median_error_px: float | None = None
     validation_p95_error_px: float | None = None
     validation_max_error_px: float | None = None
+    feature_clip: float = FEATURE_CLIP
 
     def __post_init__(self) -> None:
         if self.profile_version != PROFILE_VERSION or self.feature_backend != FEATURE_BACKEND:
@@ -61,10 +66,18 @@ class CalibrationProfile:
             raise ValueError("Calibration feature scale count does not match feature_count")
         if self.model_alpha < 0.0:
             raise ValueError("Calibration model alpha must be non-negative")
+        if self.feature_clip <= 0.0:
+            raise ValueError("Calibration feature clip must be positive")
         if self.model_type == LINEAR_MODEL:
-            if len(self.weights_x) != self.feature_count + 1:
+            component_count = len(self.projection_components)
+            if any(
+                len(component) != self.feature_count for component in self.projection_components
+            ):
+                raise ValueError("Linear projection component width does not match feature_count")
+            coefficient_count = component_count if component_count else self.feature_count
+            if len(self.weights_x) != coefficient_count + 1:
                 raise ValueError("Calibration x weight count does not match feature_count")
-            if len(self.weights_y) != self.feature_count + 1:
+            if len(self.weights_y) != coefficient_count + 1:
                 raise ValueError("Calibration y weight count does not match feature_count")
         elif self.model_type == KERNEL_MODEL:
             component_count = len(self.projection_components)
@@ -109,8 +122,32 @@ class CalibrationProfile:
     def _standardize_training(features: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         means = features.mean(axis=0)
         scales = features.std(axis=0)
-        scales[scales < 1e-8] = 1.0
+        # Hundreds of landmark coordinates barely vary during a calibration. Dividing
+        # them by a microscopic standard deviation turns harmless tracker noise into a
+        # full-strength regression input, which is a major source of session drift.
+        scales = np.maximum(scales, FEATURE_SCALE_FLOOR)
         return (features - means) / scales, means, scales
+
+    @staticmethod
+    def _project_training(
+        standardized: np.ndarray,
+        maximum_components: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if maximum_components < 1:
+            raise ValueError("Linear projection must retain at least one component")
+        if standardized.shape[1] <= maximum_components:
+            return standardized, np.empty((0, standardized.shape[1]), dtype=float)
+
+        _left, singular_values, right = np.linalg.svd(standardized, full_matrices=False)
+        if singular_values.size == 0 or singular_values[0] <= 1e-10:
+            return standardized, np.empty((0, standardized.shape[1]), dtype=float)
+        rank_threshold = max(float(singular_values[0]) * 1e-8, 1e-10)
+        rank = int(np.count_nonzero(singular_values > rank_threshold))
+        component_count = min(maximum_components, rank)
+        if component_count == 0:
+            return standardized, np.empty((0, standardized.shape[1]), dtype=float)
+        components = right[:component_count]
+        return standardized @ components.T, components
 
     @classmethod
     def fit(
@@ -119,30 +156,35 @@ class CalibrationProfile:
         screen_size: tuple[int, int],
         camera_index: int = 0,
         alpha: float = 1.0,
+        maximum_components: int = 24,
     ) -> CalibrationProfile:
         if alpha < 0.0:
             raise ValueError("Ridge alpha must be non-negative")
 
         features, targets, feature_count = cls._training_arrays(samples)
         standardized, feature_means, feature_scales = cls._standardize_training(features)
+        projected, projection_components = cls._project_training(
+            standardized,
+            maximum_components,
+        )
 
         intercept = targets.mean(axis=0)
         centered_targets = targets - intercept
-        sample_count, dimension = standardized.shape
+        sample_count, dimension = projected.shape
         if alpha == 0.0:
             coefficients = np.linalg.lstsq(
-                standardized,
+                projected,
                 centered_targets,
                 rcond=None,
             )[0]
         elif dimension > sample_count:
-            dual = standardized @ standardized.T
+            dual = projected @ projected.T
             dual += np.eye(sample_count, dtype=float) * alpha
-            coefficients = standardized.T @ np.linalg.solve(dual, centered_targets)
+            coefficients = projected.T @ np.linalg.solve(dual, centered_targets)
         else:
-            system = standardized.T @ standardized
+            system = projected.T @ projected
             system += np.eye(dimension, dtype=float) * alpha
-            coefficients = np.linalg.solve(system, standardized.T @ centered_targets)
+            coefficients = np.linalg.solve(system, projected.T @ centered_targets)
 
         weights_x = np.concatenate((coefficients[:, 0], (intercept[0],)))
         weights_y = np.concatenate((coefficients[:, 1], (intercept[1],)))
@@ -159,6 +201,7 @@ class CalibrationProfile:
             created_at=datetime.now(timezone.utc).isoformat(),
             model_type=LINEAR_MODEL,
             model_alpha=alpha,
+            projection_components=projection_components.tolist(),
         )
 
     @classmethod
@@ -241,8 +284,14 @@ class CalibrationProfile:
         means = np.asarray(self.feature_means, dtype=float)
         scales = np.asarray(self.feature_scales, dtype=float)
         standardized = (values - means) / scales
+        standardized = np.clip(standardized, -self.feature_clip, self.feature_clip)
         if self.model_type == LINEAR_MODEL:
-            vector = np.concatenate((standardized, (1.0,)))
+            if self.projection_components:
+                components = np.asarray(self.projection_components, dtype=float)
+                model_values = components @ standardized
+            else:
+                model_values = standardized
+            vector = np.concatenate((model_values, (1.0,)))
             x = float(vector @ np.asarray(self.weights_x, dtype=float))
             y = float(vector @ np.asarray(self.weights_y, dtype=float))
         else:
@@ -258,6 +307,22 @@ class CalibrationProfile:
                 kernel @ np.asarray(self.kernel_dual_y, dtype=float)
             )
         return Point(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0))
+
+    def feature_confidence(self, features: GazeFeatures) -> float:
+        """Estimate whether live landmarks still resemble the calibrated session."""
+        if len(features.values) != self.feature_count:
+            return 0.0
+        values = np.asarray(features.values, dtype=float)
+        if not np.all(np.isfinite(values)):
+            return 0.0
+        means = np.asarray(self.feature_means, dtype=float)
+        scales = np.asarray(self.feature_scales, dtype=float)
+        robust_distance = float(np.percentile(np.abs((values - means) / scales), 95))
+        if robust_distance <= 4.0:
+            return 1.0
+        if robust_distance >= self.feature_clip:
+            return 0.0
+        return (self.feature_clip - robust_distance) / (self.feature_clip - 4.0)
 
     @classmethod
     def load(cls, path: Path | None = None) -> CalibrationProfile:
@@ -289,16 +354,21 @@ class AdaptiveGazeSmoother:
         derivative_cutoff: float = 1.0,
         deadzone: float = 0.0035,
         stable_speed_threshold: float = 0.12,
+        median_window: int = 3,
     ) -> None:
         if min_cutoff <= 0.0 or derivative_cutoff <= 0.0:
             raise ValueError("Smoothing cutoffs must be positive")
         if beta < 0.0 or deadzone < 0.0 or stable_speed_threshold < 0.0:
             raise ValueError("Smoothing beta, deadzone, and stable threshold cannot be negative")
+        if median_window < 1 or median_window % 2 == 0:
+            raise ValueError("Smoothing median window must be a positive odd number")
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.derivative_cutoff = derivative_cutoff
         self.deadzone = deadzone
         self.stable_speed_threshold = stable_speed_threshold
+        self.median_window = median_window
+        self._raw_window: deque[Point] = deque(maxlen=median_window)
         self._last_raw: Point | None = None
         self._filtered: Point | None = None
         self._output: Point | None = None
@@ -312,18 +382,23 @@ class AdaptiveGazeSmoother:
 
     def update(self, point: Point, timestamp: float | None = None) -> tuple[Point, bool]:
         timestamp = monotonic() if timestamp is None else timestamp
+        self._raw_window.append(point)
+        filtered_input = Point(
+            float(np.median([item.x for item in self._raw_window])),
+            float(np.median([item.y for item in self._raw_window])),
+        )
         if self._last_raw is None or self._filtered is None or self._output is None:
-            self._last_raw = point
-            self._filtered = point
-            self._output = point
+            self._last_raw = filtered_input
+            self._filtered = filtered_input
+            self._output = filtered_input
             self._last_timestamp = timestamp
-            return point, False
+            return filtered_input, False
 
         last_timestamp = self._last_timestamp if self._last_timestamp is not None else timestamp
         elapsed = min(max(timestamp - last_timestamp, 1.0 / 240.0), 0.25)
         raw_derivative = Point(
-            (point.x - self._last_raw.x) / elapsed,
-            (point.y - self._last_raw.y) / elapsed,
+            (filtered_input.x - self._last_raw.x) / elapsed,
+            (filtered_input.y - self._last_raw.y) / elapsed,
         )
         derivative_alpha = self._alpha(self.derivative_cutoff, elapsed)
         self._derivative = Point(
@@ -334,20 +409,21 @@ class AdaptiveGazeSmoother:
         cutoff = self.min_cutoff + self.beta * speed
         position_alpha = self._alpha(cutoff, elapsed)
         candidate = Point(
-            self._filtered.x + position_alpha * (point.x - self._filtered.x),
-            self._filtered.y + position_alpha * (point.y - self._filtered.y),
+            self._filtered.x + position_alpha * (filtered_input.x - self._filtered.x),
+            self._filtered.y + position_alpha * (filtered_input.y - self._filtered.y),
         )
         stable = speed <= self.stable_speed_threshold
         output_distance = hypot(candidate.x - self._output.x, candidate.y - self._output.y)
         output = self._output if stable and output_distance <= self.deadzone else candidate
 
-        self._last_raw = point
+        self._last_raw = filtered_input
         self._filtered = candidate
         self._output = output
         self._last_timestamp = timestamp
         return output, stable
 
     def reset(self) -> None:
+        self._raw_window.clear()
         self._last_raw = None
         self._filtered = None
         self._output = None
@@ -359,6 +435,7 @@ class GazeEstimator:
     def __init__(self, profile: CalibrationProfile, smoother: AdaptiveGazeSmoother) -> None:
         self.profile = profile
         self.smoother = smoother
+        self._last_reliable: GazeSample | None = None
 
     def estimate(
         self,
@@ -366,9 +443,21 @@ class GazeEstimator:
         confidence: float,
         timestamp: float,
     ) -> GazeSample:
+        feature_confidence = self.profile.feature_confidence(features)
+        effective_confidence = confidence * feature_confidence
+        if feature_confidence < FEATURE_HOLD_CONFIDENCE and self._last_reliable is not None:
+            return GazeSample(
+                self._last_reliable.point,
+                effective_confidence,
+                self._last_reliable.stable,
+                timestamp,
+            )
         raw = self.profile.predict(features)
         point, stable = self.smoother.update(raw, timestamp)
-        return GazeSample(point, confidence, stable, timestamp)
+        sample = GazeSample(point, effective_confidence, stable, timestamp)
+        if feature_confidence >= FEATURE_HOLD_CONFIDENCE:
+            self._last_reliable = sample
+        return sample
 
 
 class GazeConfidenceGate:

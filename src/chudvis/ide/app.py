@@ -89,6 +89,7 @@ class ChudvisIdeApplication:
             mirror=self.config.mirror_camera,
         )
         smoother = AdaptiveGazeSmoother(
+            median_window=self.config.gaze.smoothing_median_window,
             min_cutoff=self.config.gaze.smoothing_min_cutoff,
             beta=self.config.gaze.smoothing_beta,
             derivative_cutoff=self.config.gaze.smoothing_derivative_cutoff,
@@ -123,7 +124,6 @@ class ChudvisIdeApplication:
                 MediaPipeTracker(max_hands=2, settings=self.config.tracking) as tracker,
             ):
                 while self._running:
-                    now = monotonic()
                     bridge_connected = self.ide_adapter.connected
                     if self.voice_session is not None and bridge_connected and not voice_started:
                         try:
@@ -150,6 +150,7 @@ class ChudvisIdeApplication:
                             self.voice_session.set_paused(True)
                         voice_bridge_connected = bridge_connected
                     frame = camera.read()
+                    now = camera.latest_frame_at
                     result = tracker.process(frame, now)
 
                     if result.gaze_features is not None:

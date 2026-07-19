@@ -11,6 +11,7 @@ from chudvis.gaze.model import (
     AdaptiveGazeSmoother,
     CalibrationProfile,
     GazeConfidenceGate,
+    GazeEstimator,
 )
 from chudvis.gaze.training import TargetSamples, select_best_profile
 
@@ -66,10 +67,24 @@ def test_smoother_holds_fixation_jitter_but_reacts_to_a_large_step() -> None:
         outputs.append(point)
 
     jitter_span = max(point.x for point in outputs) - min(point.x for point in outputs)
-    stepped, _stable = smoother.update(Point(0.85, 0.5), 20 / 30.0)
+    first_step, _stable = smoother.update(Point(0.85, 0.5), 20 / 30.0)
+    stepped, _stable = smoother.update(Point(0.85, 0.5), 21 / 30.0)
 
     assert jitter_span < 0.002
+    assert first_step.x < 0.55
     assert stepped.x > 0.70
+
+
+def test_smoother_rejects_a_single_frame_landmark_outlier() -> None:
+    smoother = AdaptiveGazeSmoother(median_window=3, deadzone=0.0)
+    smoother.update(Point(0.5, 0.5), 0.0)
+    smoother.update(Point(0.5, 0.5), 1 / 30.0)
+
+    outlier, _stable = smoother.update(Point(0.95, 0.05), 2 / 30.0)
+    recovered, _stable = smoother.update(Point(0.5, 0.5), 3 / 30.0)
+
+    assert outlier == Point(0.5, 0.5)
+    assert recovered == Point(0.5, 0.5)
 
 
 def test_confidence_gate_tolerates_only_brief_minor_drops() -> None:
@@ -93,6 +108,57 @@ def test_high_dimensional_ridge_fit_supports_fewer_samples_than_features() -> No
     assert profile.feature_count == 4
     assert abs(prediction.x - 0.25) < 0.15
     assert abs(prediction.y - 0.75) < 0.15
+
+
+def test_dense_linear_model_uses_a_bounded_projection() -> None:
+    samples = []
+    for index in range(40):
+        value = index / 39.0
+        features = tuple(
+            value * (feature_index + 1) + (index % 3) * 0.001 for feature_index in range(60)
+        )
+        samples.append((GazeFeatures(features), Point(value, 1.0 - value)))
+
+    profile = CalibrationProfile.fit(samples, (1920, 1080), alpha=1.0)
+
+    assert 0 < len(profile.projection_components) <= 24
+    assert len(profile.weights_x) == len(profile.projection_components) + 1
+
+
+def test_calibration_does_not_amplify_nearly_constant_landmarks() -> None:
+    samples = [
+        (GazeFeatures((0.0, -1e-8)), Point(0.0, 0.0)),
+        (GazeFeatures((0.5, 0.0)), Point(0.5, 0.5)),
+        (GazeFeatures((1.0, 1e-8)), Point(1.0, 1.0)),
+    ]
+
+    profile = CalibrationProfile.fit(samples, (1920, 1080), alpha=1.0)
+
+    assert profile.feature_scales[1] == pytest.approx(0.001)
+    assert profile.feature_confidence(GazeFeatures((0.5, 0.02))) == 0.0
+
+
+def test_out_of_session_features_do_not_poison_smoother_state() -> None:
+    profile = CalibrationProfile(
+        weights_x=[0.05, 0.5],
+        weights_y=[0.0, 0.5],
+        feature_means=[0.0],
+        feature_scales=[0.01],
+        feature_count=1,
+        screen_width=1920,
+        screen_height=1080,
+        camera_index=0,
+        created_at="2026-07-19T00:00:00+00:00",
+    )
+    estimator = GazeEstimator(profile, AdaptiveGazeSmoother(median_window=1))
+
+    baseline = estimator.estimate(GazeFeatures((0.0,)), 1.0, 0.0)
+    rejected = estimator.estimate(GazeFeatures((0.2,)), 1.0, 1 / 30.0)
+    recovered = estimator.estimate(GazeFeatures((0.0,)), 1.0, 2 / 30.0)
+
+    assert rejected.confidence == 0.0
+    assert rejected.point == baseline.point
+    assert recovered.point == baseline.point
 
 
 def test_loading_an_old_profile_requests_recalibration(tmp_path) -> None:

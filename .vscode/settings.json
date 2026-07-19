@@ -1,0 +1,4 @@
+{
+    "chudvis.backboard.editProvider": "google",
+    "chudvis.backboard.editModel": "gemini-3.5-flash"
+}

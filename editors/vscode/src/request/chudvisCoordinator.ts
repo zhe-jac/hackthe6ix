@@ -22,9 +22,12 @@ import {
 } from "../ui/chudvisSidebar";
 import type { StatusPresenter } from "../ui/status";
 import {
+  isExcludedWorkspacePath,
+  normalizeRelativePath,
   SafeWorkspace,
   WORKSPACE_FILE_EXCLUDE,
 } from "../workspace/safeWorkspace";
+import { fileMatchScore } from "../voice/fileIntent";
 import type { ChudvisInbound, VoiceState } from "../voice/protocol";
 import { routeVoiceRequest } from "../voice/router";
 
@@ -166,6 +169,15 @@ export class ChudvisCoordinator implements vscode.Disposable {
           await this.openFile(route.query);
           this.complete(requestId, "succeeded");
           return;
+        case "create": {
+          const created = await this.createFile(route.path);
+          const summary = `Created ${created}`;
+          this.sidebar.setTarget(created);
+          this.sidebar.setSummary(summary, false);
+          this.report(summary);
+          this.complete(requestId, "succeeded", summary);
+          return;
+        }
         case "symbol":
           await this.goToSymbol(route.query);
           this.complete(requestId, "succeeded");
@@ -341,25 +353,25 @@ export class ChudvisCoordinator implements vscode.Disposable {
   }
 
   private async openFile(query: string): Promise<void> {
-    const normalized = query.toLowerCase().replace(/^['"]|['"]$/gu, "");
     const uris = await vscode.workspace.findFiles(
       "**/*",
       WORKSPACE_FILE_EXCLUDE,
       1_001,
     );
-    const candidates = uris
-      .map((uri) => ({
-        uri,
-        relative: vscode.workspace.asRelativePath(uri, false),
-      }))
-      .filter(({ relative }) => {
-        const lower = relative.toLowerCase();
-        return (
-          lower === normalized ||
-          path.posix.basename(lower) === normalized ||
-          lower.includes(normalized)
-        );
+    const ranked = uris
+      .flatMap((uri) => {
+        const relative = vscode.workspace.asRelativePath(uri, false);
+        const score = fileMatchScore(query, relative);
+        return score === undefined ? [] : [{ uri, relative, score }];
       })
+      .sort(
+        (left, right) =>
+          left.score - right.score ||
+          left.relative.localeCompare(right.relative),
+      );
+    const bestScore = ranked[0]?.score;
+    const candidates = ranked
+      .filter((candidate) => candidate.score === bestScore)
       .slice(0, 100);
     if (candidates.length === 0) {
       throw new Error(`No workspace file matches '${query}'`);
@@ -383,6 +395,81 @@ export class ChudvisCoordinator implements vscode.Disposable {
       await vscode.workspace.openTextDocument(selected.uri),
     );
     this.report(`Opened ${selected.relative}`);
+  }
+
+  private async createFile(requestedPath: string): Promise<string> {
+    const normalized = normalizeRelativePath(requestedPath);
+    if (isExcludedWorkspacePath(normalized)) {
+      throw new Error(
+        `Workspace path '${normalized}' is excluded from Chudvis`,
+      );
+    }
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      throw new Error(
+        "Open a workspace before asking Chudvis to create a file",
+      );
+    }
+    const prefixed = folders.filter((folder) =>
+      normalized.startsWith(`${folder.name}/`),
+    );
+    let folder = prefixed.length === 1 ? prefixed[0] : folders[0];
+    if (prefixed.length === 0 && folders.length > 1) {
+      const picked = await vscode.window.showQuickPick(
+        folders.map((candidate) => ({
+          label: candidate.name,
+          description: candidate.uri.fsPath,
+          candidate,
+        })),
+        {
+          title: `Choose a workspace folder for ${normalized}`,
+          ignoreFocusOut: true,
+        },
+      );
+      folder = picked?.candidate;
+    }
+    if (folder === undefined) {
+      throw new Error("File creation was cancelled");
+    }
+    const prefix = `${folder.name}/`;
+    const folderRelative = normalized.startsWith(prefix)
+      ? normalized.slice(prefix.length)
+      : normalized;
+    if (
+      folderRelative.length === 0 ||
+      isExcludedWorkspacePath(folderRelative)
+    ) {
+      throw new Error(
+        `Workspace path '${normalized}' is excluded from Chudvis`,
+      );
+    }
+    const uri = vscode.Uri.joinPath(folder.uri, ...folderRelative.split("/"));
+    try {
+      await vscode.workspace.fs.stat(uri);
+      throw new Error(`Workspace file '${normalized}' already exists`);
+    } catch (error: unknown) {
+      if (
+        !(error instanceof vscode.FileSystemError) ||
+        error.code !== "FileNotFound"
+      ) {
+        throw error;
+      }
+    }
+    const parent = path.posix.dirname(folderRelative);
+    if (parent !== ".") {
+      await vscode.workspace.fs.createDirectory(
+        vscode.Uri.joinPath(folder.uri, ...parent.split("/")),
+      );
+    }
+    const edit = new vscode.WorkspaceEdit();
+    edit.createFile(uri, { ignoreIfExists: false, overwrite: false });
+    if (!(await vscode.workspace.applyEdit(edit))) {
+      throw new Error(`Could not create workspace file '${normalized}'`);
+    }
+    await vscode.window.showTextDocument(
+      await vscode.workspace.openTextDocument(uri),
+    );
+    return vscode.workspace.asRelativePath(uri, false);
   }
 
   private async goToSymbol(query: string): Promise<void> {

@@ -4,7 +4,7 @@ import pytest
 
 from chudvis.core.events import GazeFeatures, Point
 from chudvis.gaze.training import TargetSamples, flatten_balanced_groups, robust_sample_subset
-from chudvis.ui.calibration import dense_grid_targets
+from chudvis.ui.calibration import dense_grid_targets, drift_resistant_target_order
 
 
 def test_dense_grid_is_serpentine_and_respects_margin() -> None:
@@ -18,6 +18,17 @@ def test_dense_grid_is_serpentine_and_respects_margin() -> None:
     assert targets[9].x == pytest.approx(0.1)
     assert targets[9].y == pytest.approx(0.3)
     assert targets[-1] == Point(0.9, 0.9)
+
+
+def test_capture_order_breaks_screen_position_from_elapsed_time() -> None:
+    targets = dense_grid_targets(5, margin=0.1)
+
+    ordered = drift_resistant_target_order(targets)
+
+    assert len(ordered) == len(targets)
+    assert set(ordered) == set(targets)
+    assert ordered == drift_resistant_target_order(targets)
+    assert len({target.y for target in ordered[:5]}) >= 3
 
 
 def test_robust_sample_subset_rejects_feature_outlier() -> None:

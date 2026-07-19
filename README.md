@@ -209,15 +209,22 @@ Each realtime request requires a fresh wake word. Examples include:
 
 ```text
 Chudvis, open the configuration file
+Chudvis, create a new markdown file named Hello
 Chudvis, go to the startControls symbol
 Chudvis, explain what this function does
 Chudvis, rename this parameter to sessionToken
 Chudvis, cancel
 ```
 
-File and symbol navigation, references, Undo, and Cancel are handled locally. Questions stream from
-Backboard into the sidebar using a temporary memory-free thread. Explicit edit requests use a
-persistent workspace editing thread and exact-text operations.
+File creation, file and symbol navigation, references, Undo, and Cancel are executed locally. Spoken
+extensions such as “dot P Y” are normalized, and bounded fuzzy matching tolerates small transcription
+errors such as “plotform” for `platform.py`; ambiguous matches still require a Quick Pick. Questions
+stream from Backboard into the sidebar using a temporary memory-free thread. Explicit edits to
+existing code use a persistent workspace editing thread and exact-text operations.
+
+Local creation accepts only explicit “create ... file” commands and bounded, non-secret,
+non-binary relative workspace paths. It never overwrites an existing file. Backboard itself still
+has no file-creation or shell tool.
 
 Edits wholly inside the resolved selection or symbol can auto-apply. Any scope expansion opens a
 native VS Code diff and waits for **Apply** or an editor-hand thumbs-up. Cancel or an open palm rejects

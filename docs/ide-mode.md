@@ -114,10 +114,16 @@ Every request requires a fresh wake word. “Cancel,” “never mind,” open p
 button, shutdown, and Backboard cancellation all return safely to Ready. If wake streaming cannot
 start, editor-hand thumbs-up retains the existing local Whisper preview/confirmation flow.
 
-The deterministic router handles `open file`, `go to symbol`, `show references`, Undo, and Cancel
-without Backboard or TTS. `explain`, `analyze`, `why`, `what`, and `how` are questions. Explicit
-`change`, `fix`, `add`, `remove`, `rename`, and `refactor` verbs are edits. Question phrasing wins
-over mutation words, and anything ambiguous is a question.
+The deterministic router handles `create ... file`, `open file`, `go to symbol`, `show references`,
+Undo, and Cancel without Backboard. File creation is limited to a new, non-secret, non-binary
+relative path in an open workspace and never overwrites an existing file. Open-file routing normalizes spoken
+extensions such as “dot P Y” and uses bounded edit-distance matching for minor transcription errors;
+ties require a Quick Pick.
+
+`explain`, `analyze`, `why`, `what`, and `how` are questions. Explicit mutation verbs such as
+`change`, `create`, `fix`, `implement`, `remove`, `rename`, `replace`, and `update` are edits when the
+request is not the dedicated create-file form. Question phrasing wins over mutation words, and
+anything ambiguous is a question.
 
 ## Backboard context and memory
 

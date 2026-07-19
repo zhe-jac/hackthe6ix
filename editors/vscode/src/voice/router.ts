@@ -1,5 +1,8 @@
+import { requestedFilePath } from "./fileIntent";
+
 export type VoiceRoute =
   | { readonly kind: "open"; readonly query: string }
+  | { readonly kind: "create"; readonly path: string }
   | { readonly kind: "symbol"; readonly query: string }
   | { readonly kind: "references"; readonly query: string | undefined }
   | { readonly kind: "undo" }
@@ -9,7 +12,8 @@ export type VoiceRoute =
 
 const QUESTION_PREFIX =
   /^(?:please\s+)?(?:explain|analy[sz]e|why|what|how)\b/iu;
-const MUTATION_VERB = /\b(?:change|fix|add|remove|rename|refactor)\b/iu;
+const MUTATION_VERB =
+  /\b(?:add|change|convert|create|delete|extract|fix|implement|insert|move|refactor|remove|rename|replace|update)\b/iu;
 
 export function routeVoiceRequest(transcript: string): VoiceRoute {
   const instruction = transcript.trim().replace(/\s+/gu, " ");
@@ -17,20 +21,34 @@ export function routeVoiceRequest(transcript: string): VoiceRoute {
     throw new Error("Voice request is empty");
   }
 
-  let match = /^(?:please\s+)?open(?:\s+file)?\s+(.+)$/iu.exec(instruction);
+  let match =
+    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?open(?:\s+file)?\s+(.+)$/iu.exec(
+      instruction,
+    );
   if (match?.[1] !== undefined) {
     return { kind: "open", query: match[1].trim() };
   }
   match =
-    /^(?:please\s+)?go\s+to(?:\s+(?:function|class|symbol))?\s+(.+)$/iu.exec(
+    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?create\s+(?:(?:a|the)\s+)?(?:new\s+)?(?:(markdown|python|typescript|javascript|text|json|ya?ml|html|css)\s+)?file(?:\s+(?:named|called))?\s+(.+)$/iu.exec(
+      instruction,
+    );
+  if (match?.[2] !== undefined) {
+    return {
+      kind: "create",
+      path: requestedFilePath(match[1], match[2]),
+    };
+  }
+  match =
+    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?go\s+to(?:\s+(?:function|class|symbol))?\s+(.+)$/iu.exec(
       instruction,
     );
   if (match?.[1] !== undefined) {
     return { kind: "symbol", query: match[1].trim() };
   }
-  match = /^(?:please\s+)?show\s+references(?:\s+(?:to\s+)?(.+))?$/iu.exec(
-    instruction,
-  );
+  match =
+    /^(?:(?:please|can\s+you|could\s+you|would\s+you)\s+)?show\s+references(?:\s+(?:to\s+)?(.+))?$/iu.exec(
+      instruction,
+    );
   if (match !== null) {
     const query = match[1]?.trim();
     return {

@@ -6,6 +6,7 @@
   "camera_fourcc": "MJPG",
   "mirror_camera": true,
   "gaze": {
+    "smoothing_median_window": 3,
     "smoothing_min_cutoff": 1.25,
     "smoothing_beta": 8.0,
     "smoothing_derivative_cutoff": 1.0,

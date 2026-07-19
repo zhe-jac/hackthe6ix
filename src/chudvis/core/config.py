@@ -34,6 +34,7 @@ class GestureSettings:
 
 @dataclass(slots=True)
 class GazeSettings:
+    smoothing_median_window: int = 3
     smoothing_min_cutoff: float = 1.25
     smoothing_beta: float = 8.0
     smoothing_derivative_cutoff: float = 1.0

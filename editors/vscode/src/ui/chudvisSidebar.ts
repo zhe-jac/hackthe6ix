@@ -315,7 +315,7 @@ export class ChudvisSidebar
           <td>
             <div class="guide-action"><kbd>${shortcut}</kbd><span>Start or stop all controls.</span></div>
             <div class="guide-action"><strong>Look at a target</strong><span>Move the pointer with gaze.</span></div>
-            <div class="guide-action"><strong>Say “Chudvis,” then speak</strong><span>Navigate, ask, or request an edit.</span></div>
+            <div class="guide-action"><strong>Say “Chudvis,” then speak</strong><span>Navigate, create a file, ask, or request an edit.</span></div>
           </td>
         </tr>
         <tr>

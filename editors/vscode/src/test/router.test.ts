@@ -8,6 +8,14 @@ void test("router handles deterministic commands before model requests", () => {
     kind: "open",
     query: "config.py",
   });
+  assert.deepEqual(routeVoiceRequest("can you open plotform dot pi"), {
+    kind: "open",
+    query: "plotform dot pi",
+  });
+  assert.deepEqual(
+    routeVoiceRequest('Create a new markdown file named "Hello."'),
+    { kind: "create", path: "Hello.md" },
+  );
   assert.deepEqual(routeVoiceRequest("go to function parseConfig"), {
     kind: "symbol",
     query: "parseConfig",
@@ -32,5 +40,9 @@ void test("router never infers an edit from a question or ambiguous request", ()
   assert.deepEqual(routeVoiceRequest("please fix the parser"), {
     kind: "edit",
     instruction: "please fix the parser",
+  });
+  assert.deepEqual(routeVoiceRequest("create a helper function"), {
+    kind: "edit",
+    instruction: "create a helper function",
   });
 });

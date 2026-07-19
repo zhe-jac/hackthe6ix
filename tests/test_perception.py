@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from gazemotion.core.config import TrackingSettings
-from gazemotion.core.events import HandObservation, Point
-from gazemotion.perception.mediapipe_tracker import MediaPipeTracker
+from chudvis.core.config import TrackingSettings
+from chudvis.core.events import HandObservation, Point
+from chudvis.perception.mediapipe_tracker import MediaPipeTracker
 
 
 def _hand(timestamp: float, shift_x: float = 0.0) -> HandObservation:
@@ -26,6 +26,12 @@ def _tracker(required_frames: int = 3) -> MediaPipeTracker:
     tracker._hand_candidate_frames = 0
     tracker._hand_confirmed = False
     return tracker
+
+
+def test_detector_handedness_is_normalized_to_the_users_physical_hand() -> None:
+    assert MediaPipeTracker._physical_handedness("Left") == "right"
+    assert MediaPipeTracker._physical_handedness("Right") == "left"
+    assert MediaPipeTracker._physical_handedness("unknown") == "unknown"
 
 
 def test_transient_hand_candidate_is_not_action_ready() -> None:

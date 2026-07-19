@@ -3,7 +3,7 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gazemotion"
+name = "chudvis"
 version = "0.1.0"
 description = "Local gaze, gesture, and voice control for desktop navigation"
 readme = "README.md"
@@ -18,7 +18,13 @@ dependencies = [
 [project.optional-dependencies]
 voice = [
   "faster-whisper>=1.0,<2",
+  "requests>=2.31,<3",
+  "sentencepiece>=0.2,<1",
+  "sherpa-onnx==1.13.4",
+  "sherpa-onnx-bin==1.13.4",
+  "sherpa-onnx-core==1.13.4",
   "sounddevice>=0.4.7,<1",
+  "websocket-client>=1.8,<2",
 ]
 dev = [
   "mypy>=1.10,<2",
@@ -27,10 +33,10 @@ dev = [
 ]
 
 [project.scripts]
-gazemotion = "gazemotion.cli:main"
+chudvis = "chudvis.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/gazemotion"]
+packages = ["src/chudvis"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -45,6 +51,6 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.10"
-files = ["src/gazemotion"]
+files = ["src/chudvis"]
 strict = true
 ignore_missing_imports = true

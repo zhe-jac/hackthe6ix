@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 
-from gazemotion.actions.base import RecordingInputAdapter
-from gazemotion.core.config import GestureSettings
-from gazemotion.core.controller import InteractionController
-from gazemotion.core.events import (
+from chudvis.actions.base import RecordingInputAdapter
+from chudvis.core.config import GestureSettings
+from chudvis.core.controller import InteractionController
+from chudvis.core.events import (
     ControllerState,
     GazeSample,
     GestureEvent,

@@ -1,32 +1,35 @@
-# GazeMotion IDE mode
+# Chudvis IDE mode
 
 IDE mode separates physical perception from editor semantics. The Python runtime owns the camera,
-gaze calibration, hand identity, gesture state machines, microphone, and local transcription. The
-VS Code extension owns document state, scrolling, selection, change review, request presentation,
-and coding-agent dispatch.
+gaze calibration, hand identity, gesture state machines, one microphone stream, local “Chudvis”
+detection, ElevenLabs realtime speech I/O, and the local Whisper fallback. The VS Code extension
+owns document state, deterministic command routing, Backboard requests, bounded edit validation,
+native diffs, Undo, and the Chudvis sidebar.
 
 ```text
-camera + microphone
+camera + one microphone stream
         |
         v
-GazeMotion Python runtime
+Chudvis Python runtime
   MediaPipeTracker(max_hands=2)
   HandGestureRouter
   IdeInteractionController
+  SherpaWakeWordDetector -> ElevenLabs realtime STT/TTS
         |
         | JSON-RPC notifications over loopback
         v
 VS Code extension
   semantic selection
-  review navigator
-  request coordinator
-  VS Code CLI agent provider
+  deterministic voice router
+  Backboard provider + read-only workspace tools
+  exact-text edit validator + native diff/Undo
+  Chudvis webview view
 ```
 
 ## Compatibility boundary
 
-`gazemotion run` still creates the original one-hand `InteractionController` and emits raw desktop
-input. `gazemotion ide` creates a two-hand tracker, one `GestureEngine` per role, an
+`chudvis run` still creates the original one-hand `InteractionController` and emits raw desktop
+input. `chudvis ide` creates a two-hand tracker, one `GestureEngine` per role, an
 `IdeInteractionController`, and a local bridge. IDE-specific actions never enter `GestureEngine`,
 which remains a pure recognizer.
 
@@ -44,14 +47,29 @@ Old configuration files remain valid because the `ide` object is additive. The d
 }
 ```
 
-Set different values for `navigator_hand` and `editor_hand` to swap roles. Mirrored camera input is
-the default and matches MediaPipe's handedness convention. Use `gazemotion test --ide` to confirm
-the labels before enabling actions.
+`left` and `right` mean the user's physical hands, not the side of the mirrored preview where a hand
+appears. Chudvis converts MediaPipe's mirrored-view labels at the perception boundary before it
+assigns either role. Set different values for `navigator_hand` and `editor_hand` to swap physical
+roles, and use `chudvis test --ide` to confirm the labels before enabling actions.
+
+## Cloud setup and disclosure
+
+Install the voice extra, set `ELEVENLABS_API_KEY` for the Python process, and run **Chudvis:
+Configure Backboard API Key** in VS Code. On first bridge start, the extension presents a native
+modal disclosure that post-activation audio goes to ElevenLabs and resolved source/context goes to
+Backboard. Declining leaves the bridge stopped. Backboard credentials stay in SecretStorage; the
+ElevenLabs credential is read from the environment name configured by
+`voice.elevenlabs_api_key_env`.
+
+The default voice timings and limits are represented in `config.example.json`. Set
+`voice.wake_word_enabled` to `false` to use only the local Whisper gesture fallback. The wake model
+is pinned to `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01`, licensed Apache-2.0. Downloads
+use an exact archive checksum, per-asset checksums, a cache, and traversal/link-safe extraction.
 
 ## Selection flow
 
 VS Code extensions can observe document selections but cannot reliably convert arbitrary desktop
-coordinates into document positions. GazeMotion uses a hybrid flow:
+coordinates into document positions. Chudvis uses a hybrid flow:
 
 1. Gaze moves the OS pointer.
 2. Editor-hand pinch start locks the latest fresh gaze sample and arms the extension.
@@ -63,28 +81,78 @@ coordinates into document positions. GazeMotion uses a hybrid flow:
 Keyboard and command selection events cannot satisfy an armed gaze selection. Stale arms expire and
 document-version changes invalidate stored context.
 
-## Voice request state
+## Voice pipeline and request state
 
 ```text
-tracking -> dictating -> transcribing -> request pending
-                                            |       |
-                                     thumbs-up   open palm
-                                            |       |
-                                      submitted  cancelled
+microphone -> local Sherpa “Chudvis” -> ElevenLabs WebSocket -> VAD commit -> router
+                 no network audio       partial transcript              |
+                                                                       +-> local command
+                                                                       +-> question
+                                                                       +-> bounded edit
 ```
 
-The Python service transcribes locally and sends only the completed text to VS Code. The extension
-shows a preview, but does not log the transcript. A second thumbs-up is required before dispatch.
-The first provider invokes the configured VS Code CLI executable with structured arguments, agent
-mode, the selected file, and a prompt containing the selected range. It never constructs a shell
-command string.
+One continuously owned `sounddevice.InputStream` feeds bounded worker queues. The callback never
+performs network or model work. While ready, samples go only to local Sherpa ONNX; no audio is sent
+over the network before detection. After detection, post-wake samples accumulate while the
+ElevenLabs WebSocket connects, then stream as 16 kHz mono PCM in 100 ms chunks to
+`scribe_v2_realtime`. Server VAD commits after 1.2 seconds of silence. No-speech and maximum-request
+timeouts default to 8 and 30 seconds. Wake detection pauses during request processing and TTS, then
+re-arms automatically.
 
-## Review capture
+Every request requires a fresh wake word. “Cancel,” “never mind,” open palm, the sidebar Cancel
+button, shutdown, and Backboard cancellation all return safely to Ready. If wake streaming cannot
+start, editor-hand thumbs-up retains the existing local Whisper preview/confirmation flow.
 
-The extension starts a new review session immediately before agent dispatch. VS Code document and
-workspace file events are recorded as file/range entries. Navigator-hand movements walk those
-entries in both directions. If a session has not captured any entries, current Git and dirty-editor
-files provide a fallback review list.
+The deterministic router handles `open file`, `go to symbol`, `show references`, Undo, and Cancel
+without Backboard or TTS. `explain`, `analyze`, `why`, `what`, and `how` are questions. Explicit
+`change`, `fix`, `add`, `remove`, `rename`, and `refactor` verbs are edits. Question phrasing wins
+over mutation words, and anything ambiguous is a question.
+
+## Backboard context and memory
+
+Configure the API key with **Chudvis: Configure Backboard API Key**. It is stored in VS Code
+SecretStorage, never settings or logs. On setup, Chudvis validates the configured models against
+Backboard's Models API. The defaults are `anthropic / claude-opus-4-7-20250501` for edits and
+`google / gemini-3.5-flash` for questions. If a default is unavailable, Chudvis requires a Quick
+Pick selection; edit choices must support tools and at least 32k context.
+
+The extension creates one assistant and persistent editing thread per workspace. Editing uses
+`memory="Auto"`, with a memory prompt that permits only durable project decisions and concise
+applied-edit summaries. Questions use a temporary thread with memory off, stream into the sidebar,
+and delete that thread afterward. **Clear Editing Memory** deletes the remote thread and assistant
+and clears their workspace IDs.
+
+The initial request contains only the resolved source, necessary imports, relative path, language,
+and document version. Target priority is gesture semantic selection, manual selection, an explicitly
+named active-document symbol, the smallest cursor-enclosing symbol, then the active file. Backboard
+can inspect more context only through bounded `read_workspace_file`, `find_workspace_symbol`, and
+`list_workspace_files` tools. It has no shell, terminal, test, create, delete, or rename tool.
+
+## Edit validation and review
+
+Backboard proposes exact existing `originalText` → `replacementText` operations. Chudvis rejects
+empty or non-unique originals, stale versions, overlaps, paths outside workspace roots, generated or
+dependency folders, secrets, binaries, oversized files/responses, and changes over the configured
+limit. At most three files can be confirmed in one expanded request. All accepted replacements are
+applied together with one `WorkspaceEdit`.
+
+Operations wholly inside the resolved target auto-apply. If any operation leaves that boundary—even
+for another function in the same file—the extension creates read-only original/proposed snapshots,
+opens a native VS Code diff, and waits for Apply/thumbs-up. Cancel/open palm rejects the whole
+proposal. Navigator-hand vertical gestures cycle proposal/applied files and hunks; editor-hand
+vertical gestures scroll the active diff.
+
+After application, the extension verifies the actual text, submits the tool result, and asks for one
+plain sentence no longer than 160 characters. That sentence (or a deterministic fallback) is shown,
+sent to Python, and streamed through ElevenLabs TTS exactly once. TTS failure never rolls back code.
+Undo is available only while every affected document version and applied snapshot still match; it
+refuses rather than overwriting later work.
+
+## Legacy review capture
+
+The extension retains the original change-capture navigator for explicitly configured legacy VS
+Code CLI requests. VS Code document and workspace file events become file/range entries; Git and
+dirty-editor files provide a fallback when no entries were captured.
 
 Generated directories such as `.git`, `.venv`, `node_modules`, and `dist` are excluded. Existing
 dirty files are not treated as part of a newly submitted request unless they change after the
@@ -106,15 +174,20 @@ methods are:
 - `selection.arm` and `selection.cancel`
 - `request.preview`, `request.submit`, and `request.cancel`
 - `control.pause`
+- `voice.state`, `voice.partial`, and `voice.request`
+- `edit.approve` and `edit.cancel`
 
-The extension reports user-facing state back through `bridge.status`.
+Extension-to-Python methods are `voice.cancel`, `voice.complete`, and
+`edit.approvalRequested`; `bridge.status` remains for general status. Both sides validate enums,
+IDs, string lengths, array counts, and total message size, ignore stale request IDs, and make
+completion/cancellation idempotent.
 
 In a Remote WSL window, install with `./scripts/install-vscode-extension.sh`. The extension runs in
 the Windows/UI host so its loopback bridge matches the Windows-native camera and pointer runtime.
 WSL workspace URIs are translated to `\\wsl.localhost\<distribution>\...` only when passing selected
 file context to the Windows VS Code CLI; shell command strings are never constructed.
 
-Run IDE mode from WSL through `./scripts/gazemotion-windows.sh ide --preview`, not through the Linux
+Run IDE mode from WSL through `./scripts/chudvis-windows.sh ide --preview`, not through the Linux
 virtual environment. Linux `pynput` cannot place the pointer in the native Windows editor, and the
 Windows launcher keeps the camera runtime on the same host as the extension bridge.
 
@@ -124,7 +197,7 @@ From the repository root:
 
 ```bash
 uv sync --extra dev
-uv run gazemotion doctor --ide --skip-camera
+uv run chudvis doctor --ide --skip-camera
 uv run pytest
 uv run ruff check .
 uv run mypy
@@ -135,5 +208,6 @@ npm run verify
 npm run package
 ```
 
-Python tests use recording adapters and synthetic landmarks. Extension tests exercise protocol
-validation, authentication, dispatch, and rejection without requiring a camera or running VS Code.
+Python tests use recording adapters, fake audio streams/transports, and synthetic landmarks.
+Extension tests exercise routing, proposal/path validation, SSE parsing, bridge authentication, and
+protocol rejection without requiring a camera or running VS Code.

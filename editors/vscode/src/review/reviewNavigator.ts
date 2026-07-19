@@ -82,6 +82,10 @@ export class ReviewNavigator implements vscode.Disposable {
     this.status("Recording files changed by this agent request");
   }
 
+  public finishSession(): void {
+    this.recording = false;
+  }
+
   private trackExternal(uri: vscode.Uri): void {
     if (
       this.recording &&

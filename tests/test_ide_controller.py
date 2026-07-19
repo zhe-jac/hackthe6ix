@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 
-from gazemotion.actions.base import RecordingInputAdapter
-from gazemotion.core.config import GestureSettings, IdeSettings
-from gazemotion.core.events import (
+from chudvis.actions.base import RecordingInputAdapter
+from chudvis.core.config import GestureSettings, IdeSettings
+from chudvis.core.events import (
     GazeSample,
     GestureEvent,
     GestureType,
@@ -12,8 +12,9 @@ from gazemotion.core.events import (
     Point,
     RoleGestureEvent,
 )
-from gazemotion.ide.adapter import RecordingIdeAdapter
-from gazemotion.ide.controller import IdeControllerState, IdeInteractionController
+from chudvis.ide.adapter import RecordingIdeAdapter
+from chudvis.ide.controller import IdeControllerState, IdeInteractionController
+from chudvis.speech.realtime_voice import VoiceEvent, VoiceEventType, VoiceState
 
 
 class FakeDictation:
@@ -40,6 +41,38 @@ class DisconnectedIdeAdapter(RecordingIdeAdapter):
         return False
 
 
+class FakeVoiceSession:
+    def __init__(self) -> None:
+        self.state = VoiceState.READY
+        self.request_id: str | None = None
+        self.events: list[VoiceEvent] = []
+        self.cancelled: list[str | None] = []
+        self.completions: list[tuple[str, str, str]] = []
+        self.paused: list[bool] = []
+
+    def start(self) -> None:
+        pass
+
+    def poll(self, max_events: int = 64) -> list[VoiceEvent]:
+        events = self.events[:max_events]
+        self.events = self.events[max_events:]
+        return events
+
+    def cancel(self, request_id: str | None = None) -> bool:
+        self.cancelled.append(request_id)
+        return True
+
+    def complete(self, request_id: str, status: str, spoken_summary: str = "") -> bool:
+        self.completions.append((request_id, status, spoken_summary))
+        return True
+
+    def set_paused(self, paused: bool) -> None:
+        self.paused.append(paused)
+
+    def close(self) -> None:
+        pass
+
+
 def _role_event(
     role: HandRole,
     kind: GestureType,
@@ -51,6 +84,7 @@ def _role_event(
 
 def _controller(
     dictation: FakeDictation | None = None,
+    voice_session: FakeVoiceSession | None = None,
 ) -> tuple[IdeInteractionController, RecordingInputAdapter, RecordingIdeAdapter]:
     inputs = RecordingInputAdapter()
     ide = RecordingIdeAdapter()
@@ -61,6 +95,7 @@ def _controller(
         GestureSettings(scroll_scale=50),
         IdeSettings(),
         dictation=dictation,
+        voice_session=voice_session,
         status=lambda _message: None,
     )
     return controller, inputs, ide
@@ -140,3 +175,72 @@ def test_open_palm_cancels_pending_request() -> None:
 
     assert controller.state == IdeControllerState.TRACKING
     assert ("cancel_request", None) in ide.events
+
+
+def test_streaming_voice_events_and_expansion_approval_round_trip() -> None:
+    voice = FakeVoiceSession()
+    controller, _inputs, ide = _controller(voice_session=voice)
+    request_id = "request-1"
+    voice.events.extend(
+        [
+            VoiceEvent(
+                VoiceEventType.STATE,
+                request_id=request_id,
+                state=VoiceState.LISTENING,
+            ),
+            VoiceEvent(VoiceEventType.PARTIAL, request_id=request_id, text="fix"),
+            VoiceEvent(
+                VoiceEventType.REQUEST,
+                request_id=request_id,
+                text="fix the parser",
+            ),
+        ]
+    )
+
+    controller.poll()
+
+    assert ("voice_partial", (request_id, "fix")) in ide.events
+    assert ("voice_request", (request_id, "fix the parser")) in ide.events
+    ide.inbound.append(
+        {
+            "method": "edit.approvalRequested",
+            "params": {
+                "requestId": request_id,
+                "files": ["src/parser.py", "src/types.py"],
+                "changeCount": 2,
+            },
+        }
+    )
+    controller.poll()
+    assert controller.state == IdeControllerState.REQUEST_PENDING
+
+    controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.DICTATION_TOGGLE))
+    assert ("approve_edit", request_id) in ide.events
+
+    ide.inbound.append(
+        {
+            "method": "voice.complete",
+            "params": {
+                "requestId": request_id,
+                "status": "succeeded",
+                "spokenSummary": "Updated the parser.",
+            },
+        }
+    )
+    controller.poll()
+    assert voice.completions == [
+        (request_id, "succeeded", "Updated the parser."),
+    ]
+
+
+def test_wake_voice_prevents_competing_local_dictation_and_pauses_with_ide() -> None:
+    voice = FakeVoiceSession()
+    dictation = FakeDictation()
+    controller, _inputs, _ide = _controller(dictation, voice)
+
+    controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.DICTATION_TOGGLE))
+    assert not dictation.started
+
+    controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.PAUSE_TOGGLE, 1.0))
+    controller.on_gesture(_role_event(HandRole.EDITOR, GestureType.PAUSE_TOGGLE, 2.0))
+    assert voice.paused == [True, False]

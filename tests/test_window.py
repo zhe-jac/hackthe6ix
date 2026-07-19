@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gazemotion.ui.window import close_window, window_is_open
+from chudvis.ui.window import close_window, window_is_open
 
 
 class FakeCV2:

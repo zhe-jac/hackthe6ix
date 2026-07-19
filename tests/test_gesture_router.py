@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from gazemotion.core.config import GestureSettings, IdeSettings
-from gazemotion.core.events import GestureType, HandObservation, HandRole, Point
-from gazemotion.gestures.router import HandGestureRouter
+from chudvis.core.config import GestureSettings, IdeSettings
+from chudvis.core.events import GestureType, HandObservation, HandRole, Point
+from chudvis.gestures.router import HandGestureRouter
 
 
 def _hand(kind: str, handedness: str, timestamp: float) -> HandObservation:

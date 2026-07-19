@@ -4,9 +4,9 @@ The strongest version of this idea is a multimodal computer-control system: gaze
 
 ## 1. Product overview
 
-Working title: **GazeMotion**
+Working title: **Chudvis**
 
-GazeMotion enables hands-free or low-contact computer control through:
+Chudvis enables hands-free or low-contact computer control through:
 
 - Eye tracking for pointing and target selection
 - Hand gestures for clicks, scrolling, zooming, navigation, and window control
@@ -25,7 +25,7 @@ Traditional computer input requires precise physical interaction with a mouse, t
 - Users interacting with displays from a distance
 - Anyone seeking a more natural or experimental form of computer interaction
 
-Existing gaze-only interfaces can accidentally activate whatever the user looks at. GazeMotion avoids this “Midas touch” problem by using gaze only to select a location and requiring a deliberate gesture to perform an action.
+Existing gaze-only interfaces can accidentally activate whatever the user looks at. Chudvis avoids this “Midas touch” problem by using gaze only to select a location and requiring a deliberate gesture to perform an action.
 
 ## 3. Product goals
 
@@ -341,7 +341,7 @@ Other important considerations:
 
 ## 19. Developer-tool extension
 
-GazeMotion should also provide a semantic IDE mode optimized for reviewing and directing coding
+Chudvis should also provide a semantic IDE mode optimized for reviewing and directing coding
 agents without a mouse or keyboard. The initial implementation targets VS Code and preserves the
 general desktop controller as a separate mode.
 

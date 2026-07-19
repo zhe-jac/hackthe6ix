@@ -34,14 +34,11 @@ export class RequestCoordinator {
       `Voice request previewed (${normalized.length} characters).`,
     );
     this.status("Voice request ready; confirm or cancel with a gesture");
-    void vscode.window.showInformationMessage(`GazeMotion request: ${summary}`);
+    void vscode.window.showInformationMessage(`Chudvis request: ${summary}`);
   }
 
   public async submit(): Promise<void> {
-    const transcript = this.transcript;
-    if (transcript === undefined) {
-      throw new Error("There is no pending voice request to submit");
-    }
+    const transcript = this.consume();
     const selection = this.selection.context();
     this.review.beginSession();
     await this.agent.submit({ transcript, selection });
@@ -49,6 +46,15 @@ export class RequestCoordinator {
     this.status(
       "Agent request submitted; changed files will appear in the review stack",
     );
+  }
+
+  public consume(): string {
+    const transcript = this.transcript;
+    if (transcript === undefined) {
+      throw new Error("There is no pending voice request to submit");
+    }
+    this.transcript = undefined;
+    return transcript;
   }
 
   public cancel(): void {

@@ -11,14 +11,19 @@ import {
 import { BridgeServer, type BridgeServerOptions } from "./bridge/server";
 import { EditorActions } from "./editor/editorActions";
 import { SemanticSelectionService } from "./editor/semanticSelection";
+import { BackboardProvider } from "./model/backboardProvider";
+import { ChudvisCoordinator } from "./request/chudvisCoordinator";
 import { RequestCoordinator } from "./request/requestCoordinator";
+import { EditReviewPresenter } from "./review/editReview";
 import { ReviewNavigator } from "./review/reviewNavigator";
+import { ChudvisSidebar } from "./ui/chudvisSidebar";
 import { StatusPresenter } from "./ui/status";
+import { parseChudvisInbound } from "./voice/protocol";
 
 let runtime: ExtensionRuntime | undefined;
 
 function bridgeOptions(): BridgeServerOptions {
-  const configuration = vscode.workspace.getConfiguration("gazemotion.bridge");
+  const configuration = vscode.workspace.getConfiguration("chudvis.bridge");
   return {
     host: configuration.get<string>("host", "127.0.0.1"),
     port: configuration.get<number>("port", 8765),
@@ -30,7 +35,7 @@ function bridgeOptions(): BridgeServerOptions {
 class ExtensionRuntime implements vscode.Disposable {
   private bridge: BridgeServer | undefined;
   private paused = false;
-  private readonly output = vscode.window.createOutputChannel("GazeMotion", {
+  private readonly output = vscode.window.createOutputChannel("Chudvis", {
     log: true,
   });
   private readonly status = new StatusPresenter();
@@ -43,6 +48,9 @@ class ExtensionRuntime implements vscode.Disposable {
   private readonly review = new ReviewNavigator((message) =>
     this.report(message),
   );
+  private readonly editReview = new EditReviewPresenter((message) =>
+    this.report(message),
+  );
   private readonly agent = new VsCodeCliAgentProvider(this.output);
   private readonly requests = new RequestCoordinator(
     this.selection,
@@ -51,31 +59,77 @@ class ExtensionRuntime implements vscode.Disposable {
     this.output,
     (message) => this.report(message),
   );
+  private readonly provider: BackboardProvider;
+  private readonly sidebar: ChudvisSidebar;
+  private readonly chudvis: ChudvisCoordinator;
 
-  public constructor(context: vscode.ExtensionContext) {
+  public constructor(private readonly context: vscode.ExtensionContext) {
+    this.provider = new BackboardProvider(context, this.output);
+    const holder: { coordinator?: ChudvisCoordinator } = {};
+    this.sidebar = new ChudvisSidebar((action) => {
+      if (holder.coordinator !== undefined) {
+        void holder.coordinator.handleAction(action);
+      }
+    });
+    const coordinator = new ChudvisCoordinator(
+      this.selection,
+      this.provider,
+      this.review,
+      this.editReview,
+      this.sidebar,
+      this.status,
+      this.output,
+      () => this.bridge,
+      (message) => this.report(message),
+    );
+    holder.coordinator = coordinator;
+    this.chudvis = coordinator;
     context.subscriptions.push(
       this.output,
       this.status,
       this.selection,
       this.review,
-      vscode.commands.registerCommand("gazemotion.startBridge", () =>
+      this.editReview,
+      this.sidebar,
+      this.chudvis,
+      vscode.window.registerWebviewViewProvider(
+        ChudvisSidebar.viewType,
+        this.sidebar,
+      ),
+      vscode.commands.registerCommand("chudvis.startBridge", () =>
         this.startBridge(),
       ),
-      vscode.commands.registerCommand("gazemotion.stopBridge", () =>
+      vscode.commands.registerCommand("chudvis.stopBridge", () =>
         this.stopBridge(),
       ),
-      vscode.commands.registerCommand("gazemotion.nextChange", () =>
-        this.review.navigate(1),
+      vscode.commands.registerCommand("chudvis.nextChange", () =>
+        this.chudvis.navigateReview(1),
       ),
-      vscode.commands.registerCommand("gazemotion.previousChange", () =>
-        this.review.navigate(-1),
+      vscode.commands.registerCommand("chudvis.previousChange", () =>
+        this.chudvis.navigateReview(-1),
       ),
-      vscode.commands.registerCommand("gazemotion.cancel", () => {
+      vscode.commands.registerCommand("chudvis.cancel", () => {
         this.selection.cancel();
         this.requests.cancel();
+        void this.chudvis.cancel(true);
       }),
+      vscode.commands.registerCommand("chudvis.configureBackboardKey", () =>
+        this.provider.configureApiKey(),
+      ),
+      vscode.commands.registerCommand("chudvis.clearBackboardKey", () =>
+        this.provider.clearApiKey(),
+      ),
+      vscode.commands.registerCommand("chudvis.clearEditingMemory", () =>
+        this.chudvis.handleAction("clearMemory"),
+      ),
+      vscode.commands.registerCommand("chudvis.undo", () =>
+        this.chudvis.handleAction("undo"),
+      ),
+      vscode.commands.registerCommand("chudvis.openChanges", () =>
+        this.chudvis.handleAction("openChanges"),
+      ),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (event.affectsConfiguration("gazemotion.bridge")) {
+        if (event.affectsConfiguration("chudvis.bridge")) {
           void this.restartBridge();
         }
       }),
@@ -89,17 +143,25 @@ class ExtensionRuntime implements vscode.Disposable {
   }
 
   private async dispatch(notification: BridgeNotification): Promise<void> {
+    const voice = parseChudvisInbound(notification);
+    if (voice !== undefined) {
+      await this.chudvis.handleInbound(voice);
+      return;
+    }
     if (
       this.paused &&
-      !["control.pause", "request.cancel", "selection.cancel"].includes(
-        notification.method,
-      )
+      ![
+        "control.pause",
+        "request.cancel",
+        "selection.cancel",
+        "edit.cancel",
+      ].includes(notification.method)
     ) {
       return;
     }
     switch (notification.method) {
       case "review.navigate":
-        await this.review.navigate(
+        await this.chudvis.navigateReview(
           numberParam(notification.params, "direction"),
         );
         return;
@@ -116,7 +178,15 @@ class ExtensionRuntime implements vscode.Disposable {
         this.requests.preview(stringParam(notification.params, "transcript"));
         return;
       case "request.submit":
-        await this.requests.submit();
+        if (
+          vscode.workspace
+            .getConfiguration("chudvis")
+            .get<string>("provider", "backboard") === "legacy-vscode-cli"
+        ) {
+          await this.requests.submit();
+        } else {
+          await this.chudvis.handleLegacyRequest(this.requests.consume());
+        }
         return;
       case "request.cancel":
         this.requests.cancel();
@@ -139,6 +209,27 @@ class ExtensionRuntime implements vscode.Disposable {
     if (this.bridge !== undefined) {
       return;
     }
+    const disclosed = this.context.globalState.get<boolean>(
+      "chudvis.cloudDisclosureAccepted",
+      false,
+    );
+    if (!disclosed) {
+      const accepted = await vscode.window.showInformationMessage(
+        "Chudvis sends microphone audio only after the wake word to ElevenLabs, and sends the resolved source/context to Backboard for questions and edits.",
+        { modal: true },
+        "Continue",
+      );
+      if (accepted !== "Continue") {
+        this.status.setDetail(
+          "Cloud disclosure not accepted; bridge not started",
+        );
+        return;
+      }
+      await this.context.globalState.update(
+        "chudvis.cloudDisclosureAccepted",
+        true,
+      );
+    }
     const bridge = new BridgeServer(
       bridgeOptions(),
       (notification) => this.dispatch(notification),
@@ -157,7 +248,7 @@ class ExtensionRuntime implements vscode.Disposable {
       this.output.error(detail);
       this.status.setBridge(false, detail);
       void vscode.window.showErrorMessage(
-        `GazeMotion bridge could not start: ${detail}`,
+        `Chudvis bridge could not start: ${detail}`,
       );
     }
   }

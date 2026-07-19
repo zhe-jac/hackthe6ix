@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from gazemotion.core.config import AppConfig
+from chudvis.core.config import AppConfig
 
 
 def test_config_round_trip(tmp_path) -> None:
@@ -44,3 +44,19 @@ def test_legacy_smoothing_config_migrates_to_time_aware_defaults(tmp_path) -> No
     assert loaded.gaze.smoothing_min_cutoff == 1.25
     assert loaded.gaze.stable_speed_threshold == 0.12
     assert loaded.gaze.ridge_alpha == 1.0
+
+
+def test_legacy_voice_config_loads_with_streaming_defaults(tmp_path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({"voice": {"enabled": True, "model": "base.en"}}),
+        encoding="utf-8",
+    )
+
+    loaded = AppConfig.load(path)
+
+    assert loaded.voice.model == "base.en"
+    assert loaded.voice.wake_word_enabled
+    assert loaded.voice.elevenlabs_stt_model == "scribe_v2_realtime"
+    assert loaded.voice.audio_chunk_ms == 100
+    assert loaded.voice.vad_silence_seconds == 1.2

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from gazemotion.gaze.features import FEATURE_COUNT, HeadNormalizedGazeExtractor
+from chudvis.gaze.features import FEATURE_COUNT, HeadNormalizedGazeExtractor
 
 
 @dataclass(frozen=True)

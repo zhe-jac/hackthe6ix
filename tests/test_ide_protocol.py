@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from gazemotion.ide.protocol import ProtocolError, decode_message, encode_message, notification
+from chudvis.ide.protocol import ProtocolError, decode_message, encode_message, notification
 
 
 def test_protocol_notification_round_trip() -> None:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from gazemotion.core.config import GestureSettings
-from gazemotion.core.events import GestureType, HandObservation, Point
-from gazemotion.gestures.engine import GestureEngine
+from chudvis.core.config import GestureSettings
+from chudvis.core.events import GestureType, HandObservation, Point
+from chudvis.gestures.engine import GestureEngine
 
 
 def _base_points() -> list[Point]:

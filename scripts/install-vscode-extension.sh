@@ -34,4 +34,4 @@ if ! command -v code >/dev/null 2>&1; then
     echo "VS Code CLI was not found on PATH." >&2
     exit 2
 fi
-exec code --install-extension "$extension_dir/gazemotion-vscode.vsix" --force
+exec code --install-extension "$extension_dir/chudvis-vscode.vsix" --force

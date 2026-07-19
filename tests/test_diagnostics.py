@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from gazemotion.core.config import AppConfig
-from gazemotion.core.events import GazeFeatures, HandObservation, Point
-from gazemotion.gaze.model import CalibrationProfile
-from gazemotion.perception.mediapipe_tracker import PerceptionResult
-from gazemotion.ui.diagnostics import DiagnosticDashboard
+from chudvis.core.config import AppConfig
+from chudvis.core.events import GazeFeatures, HandObservation, Point
+from chudvis.gaze.model import CalibrationProfile
+from chudvis.perception.mediapipe_tracker import PerceptionResult
+from chudvis.ui.diagnostics import DiagnosticDashboard
 
 
 class FakeTracker:

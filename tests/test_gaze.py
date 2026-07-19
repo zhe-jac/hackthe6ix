@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from gazemotion.core.events import GazeFeatures, Point
-from gazemotion.gaze.features import FEATURE_COUNT
-from gazemotion.gaze.model import KERNEL_MODEL, AdaptiveGazeSmoother, CalibrationProfile
-from gazemotion.gaze.training import TargetSamples, select_best_profile
+from chudvis.core.events import GazeFeatures, Point
+from chudvis.gaze.features import FEATURE_COUNT
+from chudvis.gaze.model import KERNEL_MODEL, AdaptiveGazeSmoother, CalibrationProfile
+from chudvis.gaze.training import TargetSamples, select_best_profile
 
 
 def test_calibration_fits_linear_mapping() -> None:

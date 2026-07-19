@@ -41,10 +41,10 @@ export class BridgeServer {
     private readonly onState: BridgeStateHandler,
   ) {
     if (!LOOPBACK_HOSTS.has(options.host)) {
-      throw new Error("GazeMotion bridge must listen on a loopback host");
+      throw new Error("Chudvis bridge must listen on a loopback host");
     }
     if (options.port < 0 || options.port > 65_535) {
-      throw new Error("GazeMotion bridge port is invalid");
+      throw new Error("Chudvis bridge port is invalid");
     }
   }
 
@@ -177,9 +177,16 @@ export class BridgeServer {
   }
 
   public sendStatus(message: string): void {
+    this.sendNotification("bridge.status", { message });
+  }
+
+  public sendNotification(
+    method: string,
+    params: Readonly<Record<string, unknown>> = {},
+  ): void {
     const client = this.client;
     if (client?.authenticated === true && !client.socket.destroyed) {
-      client.socket.write(encodeNotification("bridge.status", { message }));
+      client.socket.write(encodeNotification(method, params));
     }
   }
 

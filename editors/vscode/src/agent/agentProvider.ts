@@ -55,11 +55,11 @@ export class VsCodeCliAgentProvider implements AgentProvider {
   public constructor(private readonly output: vscode.OutputChannel) {}
 
   public async submit(request: AgentRequest): Promise<void> {
-    const configuration = vscode.workspace.getConfiguration("gazemotion.agent");
+    const configuration = vscode.workspace.getConfiguration("chudvis.agent");
     const command = configuration.get<string>("command", "code").trim();
     const mode = configuration.get<string>("mode", "agent").trim();
     if (command.length === 0 || mode.length === 0) {
-      throw new Error("GazeMotion agent command and mode must not be empty");
+      throw new Error("Chudvis agent command and mode must not be empty");
     }
     const workspaceFolder =
       request.selection === undefined

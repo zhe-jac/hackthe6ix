@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from gazemotion.core.events import GazeFeatures, Point
-from gazemotion.gaze.training import TargetSamples, flatten_balanced_groups, robust_sample_subset
-from gazemotion.ui.calibration import dense_grid_targets
+from chudvis.core.events import GazeFeatures, Point
+from chudvis.gaze.training import TargetSamples, flatten_balanced_groups, robust_sample_subset
+from chudvis.ui.calibration import dense_grid_targets
 
 
 def test_dense_grid_is_serpentine_and_respects_margin() -> None:

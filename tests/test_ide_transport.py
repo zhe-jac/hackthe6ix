@@ -5,8 +5,8 @@ import socket
 from threading import Thread
 from time import monotonic, sleep
 
-from gazemotion.ide.protocol import decode_message, encode_message, notification
-from gazemotion.ide.transport import IdeTransport
+from chudvis.ide.protocol import decode_message, encode_message, notification
+from chudvis.ide.transport import IdeTransport
 
 
 def test_transport_handshake_send_and_receive() -> None:

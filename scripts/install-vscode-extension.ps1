@@ -3,12 +3,12 @@ param()
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$source = Join-Path $projectRoot "editors\vscode\gazemotion-vscode.vsix"
+$source = Join-Path $projectRoot "editors\vscode\chudvis-vscode.vsix"
 if (-not (Test-Path -LiteralPath $source)) {
     throw "Packaged extension not found at $source"
 }
 
-$destination = Join-Path $env:TEMP "gazemotion-vscode.vsix"
+$destination = Join-Path $env:TEMP "chudvis-vscode.vsix"
 Copy-Item -LiteralPath $source -Destination $destination -Force
 
 $code = Get-Command code.cmd -ErrorAction SilentlyContinue

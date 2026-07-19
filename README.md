@@ -1,8 +1,14 @@
-# GazeMotion
+<p align="center">
+  <img src="docs/assets/chudvis-logo.png" width="220" alt="Chudvis logo">
+</p>
 
-GazeMotion is a local multimodal control prototype that uses webcam gaze estimation to position
-the pointer, hand gestures to act, and optional offline speech recognition for text and coding
-requests. It supports both raw desktop control and a semantic two-hand VS Code mode.
+# Chudvis
+
+Chudvis is a multimodal control prototype that uses webcam gaze estimation to position the
+pointer, hand gestures to act, and voice for text and coding requests. It supports both raw desktop
+control and Chudvis IDE mode, a semantic two-hand VS Code voice assistant. Desktop dictation stays
+offline; Chudvis detects its wake word locally, then uses configured cloud services for activated
+requests.
 
 The current MVP intentionally uses raw operating-system mouse and keyboard events. It can
 therefore work outside a browser, but it does not yet understand whether a screen coordinate
@@ -30,11 +36,14 @@ Press `Esc` in the optional preview window, or `Ctrl+C` in the terminal, for an 
 | Editor-hand quick pinch | Click the locked gaze target and select its enclosing symbol |
 | Editor-hand open-palm movement | Scroll within the active editor |
 | Navigator-hand open-palm movement | Move to the previous or next captured change |
-| Editor-hand thumbs-up | Start/finish local transcription; repeat after preview to submit |
+| Say “Chudvis,” then speak | Start one realtime navigation, question, or code-edit request |
+| Editor-hand thumbs-up | Approve an expanded edit, or use local Whisper when wake streaming is unavailable |
 | Open palm held while a request is pending | Cancel the request |
 | Open palm held otherwise | Pause or resume IDE control |
 
-Hand roles are configurable and default to left hand for navigation and right hand for editing.
+Hand roles are configurable and default to the user's physical left hand for navigation and
+physical right hand for editing. The labels do not refer to which side of the mirrored preview a
+hand appears on; Chudvis normalizes the detector's mirrored-view labels before assigning roles.
 
 ## Setup
 
@@ -42,17 +51,18 @@ Python 3.10 through 3.12 is supported.
 
 ```bash
 uv sync --extra voice --extra dev
-uv run gazemotion doctor
-uv run gazemotion calibrate
-uv run gazemotion run
+uv run chudvis doctor
+uv run chudvis calibrate
+uv run chudvis run
 ```
 
-Speech support downloads the configured Whisper model the first time it is used. To omit the
-larger speech dependencies:
+Voice support downloads the configured Whisper fallback and the pinned Apache-2.0 Sherpa ONNX
+keyword model the first time each is used. The wake-model archive and runtime assets are verified
+against pinned SHA-256 checksums. To omit the larger speech dependencies:
 
 ```bash
 uv sync --extra dev
-uv run gazemotion run --no-voice
+uv run chudvis run --no-voice
 ```
 
 MediaPipe face and hand model assets are also downloaded into the user cache on first use. An
@@ -63,13 +73,13 @@ Gaze calibration uses a dense 5x5 target grid, balanced per-target samples, robu
 blink rejection, and a separate nine-target validation pass. It compares regularized linear and
 nonlinear gaze mappings and saves the simpler model unless the nonlinear mapping produces a
 meaningful validation improvement. Runtime motion is stabilized with time-aware low-lag
-filtering. Calibration profiles are model versioned; rerun `gazemotion calibrate` when prompted.
+filtering. Calibration profiles are model versioned; rerun `chudvis calibrate` when prompted.
 
 On Linux, raw input libraries normally require an X11 session. Wayland compositors may block
 synthetic global input. Start with `--dry-run --preview` if you are unsure:
 
 ```bash
-uv run gazemotion run --dry-run --preview
+uv run chudvis run --dry-run --preview
 ```
 
 ## VS Code IDE mode
@@ -84,31 +94,45 @@ When run from WSL, the installer deliberately uses the Windows VS Code CLI. Runn
 `code --install-extension` directly inside a WSL terminal targets the remote extension host and
 will reject this UI-side extension. Reload the VS Code window after installation.
 
-Open the target workspace in VS Code, calibrate GazeMotion if needed, and then run:
+Open the target workspace in VS Code, calibrate Chudvis if needed, and then run:
 
 ```bash
 uv sync --extra voice --extra dev
-uv run gazemotion test --ide
-uv run gazemotion ide --preview
+uv run chudvis test --ide
+uv run chudvis ide --preview
 ```
+
+Before starting IDE mode, expose an ElevenLabs key to the Python process and configure Backboard
+from **Chudvis: Configure Backboard API Key** in the VS Code Command Palette. The Backboard key is
+stored only in VS Code SecretStorage.
+
+```bash
+export ELEVENLABS_API_KEY="..."
+```
+
+For Windows-native execution, define `ELEVENLABS_API_KEY` in the Windows environment (or launch
+from a PowerShell session where it is set). If the ElevenLabs key, wake dependencies, or microphone
+are unavailable, IDE mode retains the confirmed thumbs-up/local-Whisper request flow.
 
 From WSL, run the same flow through Windows-native Python so the webcam, pointer, extension bridge,
 and VS Code UI share the Windows host:
 
 ```bash
-./scripts/gazemotion-windows.sh doctor --ide --skip-camera
-./scripts/gazemotion-windows.sh test --ide
-./scripts/gazemotion-windows.sh ide --preview
+./scripts/chudvis-windows.sh doctor --ide --skip-camera
+./scripts/chudvis-windows.sh test --ide
+./scripts/chudvis-windows.sh ide --preview
 ```
 
 The extension starts its bridge on `127.0.0.1:8765`; the Python process reconnects automatically.
-For a shared secret, set the same non-empty value in `ide.session_token` in the GazeMotion JSON
-configuration and `gazemotion.bridge.sessionToken` in VS Code settings.
+For a shared secret, set the same non-empty value in `ide.session_token` in the Chudvis JSON
+configuration and `chudvis.bridge.sessionToken` in VS Code settings.
 
-Voice submissions use the configurable VS Code CLI command and invoke `code chat --mode agent`.
-The selected file and range are attached as context. Changed files observed after submission form
-the navigator hand's review stack; when there is no active captured session, Git and dirty-editor
-changes are used as a fallback.
+Chudvis handles file/symbol navigation locally. Questions stream from Backboard into the sidebar
+without memory or speech. Explicit code edits use exact-text proposals and auto-apply only inside
+the resolved selection/symbol; any scope expansion opens a native diff and waits for Apply or a
+thumbs-up. Successful edits get a guarded Undo and one short ElevenLabs spoken summary. The old VS
+Code CLI agent can be selected explicitly as `chudvis.provider = legacy-vscode-cli` for confirmed
+local-Whisper fallback requests; it is not the default.
 
 See [docs/ide-mode.md](docs/ide-mode.md) for architecture, state transitions, configuration, and
 failure behavior.
@@ -119,25 +143,25 @@ WSLg can display Linux windows but Linux `pynput` events do not control native W
 From WSL, use the included launcher to run the same source tree with Windows-native Python:
 
 ```bash
-./scripts/gazemotion-windows.sh doctor --skip-camera
-./scripts/gazemotion-windows.sh calibrate --camera 0
-./scripts/gazemotion-windows.sh run --preview --no-voice
-./scripts/gazemotion-windows.sh ide --preview
+./scripts/chudvis-windows.sh doctor --skip-camera
+./scripts/chudvis-windows.sh calibrate --camera 0
+./scripts/chudvis-windows.sh run --preview --no-voice
+./scripts/chudvis-windows.sh ide --preview
 ```
 
-The launcher forwards any additional GazeMotion arguments. It uses Windows `uv`, Python 3.12,
-and a separate virtual environment under `%LOCALAPPDATA%\GazeMotion`, so the Linux `.venv` is
+The launcher forwards any additional Chudvis arguments. It uses Windows `uv`, Python 3.12,
+and a separate virtual environment under `%LOCALAPPDATA%\Chudvis`, so the Linux `.venv` is
 left untouched. If Windows `uv` is missing, install it once from PowerShell with
 `winget install --id astral-sh.uv -e`.
 
 ## Commands
 
 ```text
-gazemotion doctor [--ide]               Check runtime hardware and optionally the VS Code bridge
-gazemotion calibrate [--grid-size 5|7]  Run dense gaze calibration and validation
-gazemotion test [--camera 0]            Safely inspect tracking, gaze, and gesture triggers
-gazemotion run [--preview] [--dry-run]  Start desktop control
-gazemotion ide [--preview] [--dry-run]  Start semantic two-hand VS Code control
+chudvis doctor [--ide]               Check runtime hardware and optionally the VS Code bridge
+chudvis calibrate [--grid-size 5|7]  Run dense gaze calibration and validation
+chudvis test [--camera 0]            Safely inspect tracking, gaze, and gesture triggers
+chudvis run [--preview] [--dry-run]  Start desktop control
+chudvis ide [--preview] [--dry-run]  Start semantic two-hand VS Code control
 ```
 
 ## Tracking diagnostics
@@ -145,7 +169,7 @@ gazemotion ide [--preview] [--dry-run]  Start semantic two-hand VS Code control
 Run diagnostics before calibration or whenever gestures feel unreliable:
 
 ```bash
-uv run gazemotion test
+uv run chudvis test
 ```
 
 This mode never emits operating-system mouse or keyboard actions. Its dashboard shows:

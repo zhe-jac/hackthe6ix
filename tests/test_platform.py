@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from gazemotion.core.platform import is_wsl, list_video_devices
+from chudvis.core.platform import is_wsl, list_video_devices
 
 
 def test_is_wsl_detects_wsl_environment(monkeypatch) -> None:

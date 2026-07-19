@@ -1,9 +1,9 @@
 {
-  "name": "gazemotion-vscode",
-  "displayName": "GazeMotion",
-  "description": "Gaze, two-hand gesture, and voice control for agentic coding workflows.",
-  "version": "0.1.1",
-  "publisher": "gazemotion",
+  "name": "chudvis-vscode",
+  "displayName": "Chudvis",
+  "description": "Wake-word voice navigation, explanations, and bounded code edits for VS Code.",
+  "version": "0.2.0",
+  "publisher": "chudvis",
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
@@ -23,77 +23,159 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "Voice requests can ask an agent to modify and execute workspace code."
+      "description": "Chudvis sends selected workspace context to a configured provider and can apply validated text edits."
     },
     "virtualWorkspaces": false
   },
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:gazemotion.startBridge",
-    "onCommand:gazemotion.stopBridge"
+    "onView:chudvis.sidebar",
+    "onCommand:chudvis.startBridge",
+    "onCommand:chudvis.stopBridge"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "chudvis",
+          "title": "Chudvis",
+          "icon": "resources/chudvis.svg"
+        }
+      ]
+    },
+    "views": {
+      "chudvis": [
+        {
+          "id": "chudvis.sidebar",
+          "name": "Voice Assistant",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
-        "command": "gazemotion.startBridge",
-        "title": "GazeMotion: Start IDE Bridge"
+        "command": "chudvis.startBridge",
+        "title": "Chudvis: Start IDE Bridge"
       },
       {
-        "command": "gazemotion.stopBridge",
-        "title": "GazeMotion: Stop IDE Bridge"
+        "command": "chudvis.stopBridge",
+        "title": "Chudvis: Stop IDE Bridge"
       },
       {
-        "command": "gazemotion.nextChange",
-        "title": "GazeMotion: Next Captured Change"
+        "command": "chudvis.nextChange",
+        "title": "Chudvis: Next Captured Change"
       },
       {
-        "command": "gazemotion.previousChange",
-        "title": "GazeMotion: Previous Captured Change"
+        "command": "chudvis.previousChange",
+        "title": "Chudvis: Previous Captured Change"
       },
       {
-        "command": "gazemotion.cancel",
-        "title": "GazeMotion: Cancel Pending Action"
+        "command": "chudvis.cancel",
+        "title": "Chudvis: Cancel Pending Action"
+      },
+      {
+        "command": "chudvis.configureBackboardKey",
+        "title": "Chudvis: Configure Backboard API Key"
+      },
+      {
+        "command": "chudvis.clearBackboardKey",
+        "title": "Chudvis: Clear Backboard API Key"
+      },
+      {
+        "command": "chudvis.clearEditingMemory",
+        "title": "Chudvis: Clear Editing Memory"
+      },
+      {
+        "command": "chudvis.openChanges",
+        "title": "Chudvis: Open Changes"
+      },
+      {
+        "command": "chudvis.undo",
+        "title": "Chudvis: Undo Last Edit"
       }
     ],
     "configuration": {
-      "title": "GazeMotion",
+      "title": "Chudvis",
       "properties": {
-        "gazemotion.bridge.host": {
+        "chudvis.bridge.host": {
           "type": "string",
           "default": "127.0.0.1",
-          "description": "Loopback host used by the local GazeMotion bridge."
+          "description": "Loopback host used by the local Chudvis bridge."
         },
-        "gazemotion.bridge.port": {
+        "chudvis.bridge.port": {
           "type": "number",
           "default": 8765,
           "minimum": 1,
           "maximum": 65535,
-          "description": "Loopback port used by the local GazeMotion bridge."
+          "description": "Loopback port used by the local Chudvis bridge."
         },
-        "gazemotion.bridge.sessionToken": {
+        "chudvis.bridge.sessionToken": {
           "type": "string",
           "default": "",
           "scope": "machine",
           "description": "Optional token that must match the Python IDE configuration."
         },
-        "gazemotion.bridge.maxMessageBytes": {
+        "chudvis.bridge.maxMessageBytes": {
           "type": "number",
           "default": 262144,
           "minimum": 1024,
           "maximum": 1048576,
           "description": "Maximum accepted bridge notification size."
         },
-        "gazemotion.agent.command": {
+        "chudvis.agent.command": {
           "type": "string",
           "default": "code",
           "scope": "machine",
-          "description": "VS Code CLI executable used to submit agent requests."
+          "description": "VS Code CLI executable used only by the explicitly selected legacy provider."
         },
-        "gazemotion.agent.mode": {
+        "chudvis.agent.mode": {
           "type": "string",
           "default": "agent",
-          "description": "Agent mode passed to the VS Code CLI chat command."
+          "description": "Agent mode passed only to the explicitly selected legacy VS Code CLI provider."
+        },
+        "chudvis.provider": {
+          "type": "string",
+          "enum": [
+            "backboard",
+            "legacy-vscode-cli"
+          ],
+          "default": "backboard",
+          "description": "Model provider for confirmed local-Whisper fallback requests. Wake-word requests always use the bounded Chudvis flow."
+        },
+        "chudvis.backboard.editProvider": {
+          "type": "string",
+          "default": "anthropic",
+          "description": "Backboard provider used for code edits. Validated against the Models API."
+        },
+        "chudvis.backboard.editModel": {
+          "type": "string",
+          "default": "claude-opus-4-7-20250501",
+          "description": "Backboard tool-capable model used for code edits."
+        },
+        "chudvis.backboard.questionProvider": {
+          "type": "string",
+          "default": "google",
+          "description": "Backboard provider used for stateless questions."
+        },
+        "chudvis.backboard.questionModel": {
+          "type": "string",
+          "default": "gemini-3.5-flash",
+          "description": "Backboard model used for stateless questions."
+        },
+        "chudvis.backboard.requestTimeoutMs": {
+          "type": "number",
+          "default": 60000,
+          "minimum": 5000,
+          "maximum": 180000,
+          "description": "Timeout for each Backboard request."
+        },
+        "chudvis.edits.maxChangeCharacters": {
+          "type": "number",
+          "default": 100000,
+          "minimum": 1000,
+          "maximum": 250000,
+          "description": "Maximum combined original and replacement characters in one Chudvis edit."
         }
       }
     }
@@ -104,7 +186,7 @@
     "lint": "eslint src --max-warnings=0",
     "format:check": "prettier --check src package.json tsconfig.json eslint.config.mjs",
     "test": "npm run compile && node --test dist/test/*.test.js",
-    "package": "npm run compile && vsce package --out gazemotion-vscode.vsix",
+    "package": "npm run compile && vsce package --out chudvis-vscode.vsix",
     "verify": "npm run check-types && npm run lint && npm run format:check && npm test"
   },
   "devDependencies": {

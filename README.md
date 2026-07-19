@@ -43,8 +43,8 @@ Open the Chudvis view from the Activity Bar, then:
 
 1. Choose **Set Backboard Key** to enable voice actions, questions, and code edits.
 2. Choose **Set ElevenLabs Key** to enable wake-word speech input.
-3. Choose **Choose Voice** to select an ElevenLabs voice available to your account for spoken
-   feedback. API-key access and remaining credits do not guarantee access to every voice.
+3. Ensure the ElevenLabs account contains voices named exactly **CHUD** and **JARVIS**. Chudvis uses
+   CHUD by default; choose **Choose Voice Preset** to switch between the two account voices.
 4. Choose **Recalibrate Gaze** and follow the on-screen targets.
 5. Choose **Test Tracking** to check gaze and gesture recognition without emitting mouse or
    keyboard input.
@@ -65,8 +65,8 @@ hand.
 | --- | --- |
 | Gaze | Move the pointer |
 | Editor-hand quick pinch | Click the gaze target and select its enclosing symbol or current line |
-| Editor-hand vertical open-palm movement | Scroll the editor or diff |
-| Navigator-hand vertical open-palm movement | Move between captured changes |
+| Editor-hand open-palm hold, then vertical movement | Continuously scroll the editor or diff |
+| Navigator-hand open-palm hold, then vertical movement | Move between captured changes |
 | “Chudvis,” followed by a request | Navigate, ask a question, or request an edit |
 | Editor-hand thumbs-up | Approve a pending edit or use the local dictation fallback |
 | Either-hand open-palm hold | Cancel an active request, otherwise pause or resume controls |

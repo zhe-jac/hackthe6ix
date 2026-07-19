@@ -32,7 +32,7 @@ class DiagnosticNotice:
 _PRACTICE_CARDS = (
     ("click", "1. CLICK", "Quick thumb+index pinch,", "release right away"),
     ("drag", "2. DRAG", "Pinch and HOLD ~0.6s,", "move hand, then release"),
-    ("scroll", "3. SCROLL", "Open palm facing camera,", "sweep hand up or down"),
+    ("scroll", "3. SCROLL", "Hold open palm briefly,", "then move it up or down"),
     ("pause", "4. PAUSE", "Open palm held STILL", "for ~1.3 seconds"),
     ("dictate", "5. DICTATE", "Thumbs-up pose,", "hold for ~0.7s"),
 )
@@ -497,7 +497,11 @@ class DiagnosticDashboard:
             if progress["drag"] > 0.0:
                 return "keep holding the pinch...", progress["drag"]
         if key == "scroll" and open_palm:
-            return "palm seen - sweep up/down", 0.0
+            if mode == "scrolling":
+                return "SCROLLING - move up/down", 1.0
+            if mode == "scroll_armed":
+                return "READY - move up/down", 1.0
+            return "hold to arm scrolling...", progress["scroll"]
         if key == "pause" and progress["pause"] > 0.0:
             return "hold still...", progress["pause"]
         if key == "dictate" and progress["thumbs_up"] > 0.0:

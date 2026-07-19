@@ -38,6 +38,8 @@ class IdeAdapter(Protocol):
         detail: str = "",
     ) -> None: ...
 
+    def voice_level(self, level: float, dbfs: float) -> None: ...
+
     def voice_partial(self, request_id: str, text: str) -> None: ...
 
     def voice_request(self, request_id: str, transcript: str) -> None: ...
@@ -110,6 +112,17 @@ class SocketIdeAdapter:
         if detail:
             params["detail"] = detail[:500]
         self.transport.notify("voice.state", params)
+
+    def voice_level(self, level: float, dbfs: float) -> None:
+        self.transport.notify(
+            "voice.level",
+            {
+                "level": round(max(0.0, min(1.0, level)), 3),
+                "dbfs": round(max(-100.0, min(0.0, dbfs)), 1),
+            },
+            continuous=True,
+            low_priority=True,
+        )
 
     def voice_partial(self, request_id: str, text: str) -> None:
         self.transport.notify(
@@ -207,6 +220,9 @@ class RecordingIdeAdapter:
         detail: str = "",
     ) -> None:
         self._record("voice_state", (state, request_id, detail))
+
+    def voice_level(self, level: float, dbfs: float) -> None:
+        self._record("voice_level", (level, dbfs))
 
     def voice_partial(self, request_id: str, text: str) -> None:
         self._record("voice_partial", (request_id, text))

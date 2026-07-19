@@ -2,7 +2,7 @@
   "name": "chudvis-vscode",
   "displayName": "Chudvis",
   "description": "Wake-word voice navigation, explanations, and bounded code edits for VS Code.",
-  "version": "0.3.15",
+  "version": "0.3.16",
   "publisher": "chudvis",
   "license": "UNLICENSED",
   "repository": {
@@ -115,7 +115,7 @@
       },
       {
         "command": "chudvis.configureElevenLabsVoice",
-        "title": "Chudvis: Choose ElevenLabs Feedback Voice"
+        "title": "Chudvis: Choose Feedback Voice Preset"
       },
       {
         "command": "chudvis.testElevenLabsVoice",
@@ -250,12 +250,26 @@
           "scope": "machine",
           "description": "Speak short action-completion summaries through ElevenLabs."
         },
+        "chudvis.elevenLabs.voicePreset": {
+          "type": "string",
+          "enum": [
+            "chud",
+            "jarvis"
+          ],
+          "enumDescriptions": [
+            "Existing ElevenLabs account voice named exactly CHUD.",
+            "Existing ElevenLabs account voice named exactly JARVIS."
+          ],
+          "default": "chud",
+          "scope": "machine",
+          "description": "Chudvis voice preset resolved from the exact ElevenLabs account voice names CHUD and JARVIS. CHUD is the default."
+        },
         "chudvis.elevenLabs.voiceId": {
           "type": "string",
           "default": "",
           "maxLength": 100,
           "scope": "machine",
-          "description": "ElevenLabs voice ID used for spoken Chudvis feedback. Voice availability depends on the account, so choose one from the Chudvis sidebar or enter an ID here."
+          "description": "Account-specific ElevenLabs voice ID managed by the selected Chudvis voice preset."
         },
         "chudvis.runtime.preview": {
           "type": "boolean",

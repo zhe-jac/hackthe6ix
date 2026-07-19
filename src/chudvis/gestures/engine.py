@@ -33,7 +33,8 @@ class GestureEngine:
         self._still_since: float | None = None
         self._still_anchor: Point | None = None
         self._open_latched = False
-        self._scroll_accumulator_y = 0.0
+        self._scroll_armed = False
+        self._scrolling = False
         self._last_scroll_event = -1e9
         self._thumbs_since: float | None = None
         self._thumbs_latched = False
@@ -91,13 +92,16 @@ class GestureEngine:
 
     def hold_progress(self, timestamp: float) -> dict[str, float]:
         """Return 0..1 progress for holds displayed by diagnostics."""
-        progress = {"thumbs_up": 0.0, "pause": 0.0, "drag": 0.0}
+        progress = {"thumbs_up": 0.0, "pause": 0.0, "drag": 0.0, "scroll": 0.0}
         if self._thumbs_since is not None and not self._thumbs_latched:
             duration = max(self.settings.thumbs_hold_seconds, 1e-6)
             progress["thumbs_up"] = min((timestamp - self._thumbs_since) / duration, 1.0)
         if self._still_since is not None and not self._open_latched:
             duration = max(self.settings.open_hold_seconds, 1e-6)
             progress["pause"] = min((timestamp - self._still_since) / duration, 1.0)
+        if self._open_pose_since is not None:
+            duration = max(self.settings.scroll_arm_seconds, 1e-6)
+            progress["scroll"] = min((timestamp - self._open_pose_since) / duration, 1.0)
         if self._pinching and not self._dragging:
             duration = max(self.settings.drag_hold_seconds, 1e-6)
             effective_timestamp = (
@@ -119,6 +123,10 @@ class GestureEngine:
             return "pinch_armed"
         if self._thumbs_since is not None:
             return "thumbs_up_arming"
+        if self._scrolling:
+            return "scrolling"
+        if self._scroll_armed:
+            return "scroll_armed"
         if self._open_pose_since is not None:
             return "open_palm_arming"
         return "neutral"
@@ -128,7 +136,8 @@ class GestureEngine:
         self._still_since = None
         self._still_anchor = None
         self._open_latched = False
-        self._scroll_accumulator_y = 0.0
+        self._scroll_armed = False
+        self._scrolling = False
 
     def _reset_non_pinch_holds(self) -> None:
         self._reset_open_state()
@@ -264,33 +273,31 @@ class GestureEngine:
             assert self._still_anchor is not None
             assert self._still_since is not None
             movement_from_anchor = _distance(palm, self._still_anchor)
-            delta_y = palm.y - self._last_palm.y
 
             if movement_from_anchor > self.settings.open_stillness:
                 self._still_since = timestamp
                 self._still_anchor = palm
 
-            scroll_armed = timestamp - self._open_pose_since >= self.settings.scroll_arm_seconds
             if (
-                scroll_armed
-                and not self._open_latched
-                and abs(delta_y) >= self.settings.scroll_deadzone * 0.5
+                not self._scroll_armed
+                and timestamp - self._open_pose_since >= self.settings.scroll_arm_seconds
             ):
-                if self._scroll_accumulator_y * delta_y < 0:
-                    self._scroll_accumulator_y = delta_y
-                else:
-                    self._scroll_accumulator_y += delta_y
-            elif abs(delta_y) < self.settings.scroll_deadzone * 0.5:
-                self._scroll_accumulator_y *= 0.5
+                # Ignore motion made while arming. Once armed, this point becomes
+                # the origin so slow movement is accumulated instead of lost on
+                # every camera frame.
+                self._scroll_armed = True
+                self._last_palm = palm
 
+            scroll_delta = palm.y - self._last_palm.y
             scroll_ready = (
-                abs(self._scroll_accumulator_y) >= self.settings.scroll_activation_distance
+                self._scroll_armed
+                and not self._open_latched
+                and abs(scroll_delta) >= self.settings.scroll_deadzone
                 and timestamp - self._last_scroll_event
                 >= self.settings.scroll_event_interval_seconds
             )
             if scroll_ready:
-                scroll_delta = self._scroll_accumulator_y
-                self._scroll_accumulator_y = 0.0
+                self._scrolling = True
                 self._last_scroll_event = timestamp
                 self._last_palm = palm
                 return [
@@ -303,14 +310,16 @@ class GestureEngine:
                 ]
 
             if (
-                not self._open_latched
+                not self._scrolling
+                and not self._open_latched
                 and timestamp - self._still_since >= self.settings.open_hold_seconds
                 and self._discrete_allowed(timestamp)
             ):
                 self._open_latched = True
                 self._last_discrete = timestamp
                 events.append(GestureEvent(GestureType.PAUSE_TOGGLE, timestamp, hand.confidence))
-            self._last_palm = palm
+            if not self._scroll_armed:
+                self._last_palm = palm
             return events
 
         self._reset_open_state()

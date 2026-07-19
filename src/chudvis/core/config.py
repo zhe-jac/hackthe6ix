@@ -22,10 +22,9 @@ class GestureSettings:
     drag_hold_seconds: float = 0.55
     drag_scale: float = 2.0
     scroll_arm_seconds: float = 0.30
-    scroll_deadzone: float = 0.012
-    scroll_activation_distance: float = 0.035
-    scroll_event_interval_seconds: float = 0.16
-    scroll_scale: float = 55.0
+    scroll_deadzone: float = 0.008
+    scroll_event_interval_seconds: float = 0.05
+    scroll_scale: float = 240.0
     open_hold_seconds: float = 1.25
     open_stillness: float = 0.018
     thumbs_hold_seconds: float = 0.65
@@ -135,6 +134,19 @@ class AppConfig:
         if legacy_smoothing:
             gaze_data.pop("stable_speed_threshold", None)
             gaze_data.pop("ridge_alpha", None)
+        gesture_data = dict(data.get("gestures", {}))
+        # Older releases required a large movement threshold after the timed
+        # palm hold. Scrolling is now activated by the hold itself.
+        legacy_scroll = gesture_data.pop("scroll_activation_distance", None) is not None
+        if legacy_scroll:
+            scroll_default_migrations = {
+                "scroll_deadzone": (0.012, 0.008),
+                "scroll_event_interval_seconds": (0.16, 0.05),
+                "scroll_scale": (55.0, 240.0),
+            }
+            for key, (old_default, new_default) in scroll_default_migrations.items():
+                if gesture_data.get(key) == old_default:
+                    gesture_data[key] = new_default
         return cls(
             camera_index=int(data.get("camera_index", 0)),
             camera_width=int(data.get("camera_width", 1280)),
@@ -143,7 +155,7 @@ class AppConfig:
             camera_fourcc=str(data.get("camera_fourcc", "MJPG")),
             mirror_camera=bool(data.get("mirror_camera", True)),
             gaze=GazeSettings(**gaze_data),
-            gestures=GestureSettings(**data.get("gestures", {})),
+            gestures=GestureSettings(**gesture_data),
             tracking=TrackingSettings(**data.get("tracking", {})),
             voice=VoiceSettings(**data.get("voice", {})),
             ide=IdeSettings(**data.get("ide", {})),

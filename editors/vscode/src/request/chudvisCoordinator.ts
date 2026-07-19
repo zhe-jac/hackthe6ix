@@ -101,6 +101,9 @@ export class ChudvisCoordinator implements vscode.Disposable {
 
   public async handleInbound(message: ChudvisInbound): Promise<void> {
     switch (message.method) {
+      case "voice.level":
+        this.sidebar.setVoiceLevel(message.level, message.dbfs);
+        return;
       case "voice.state":
         if (
           message.requestId !== undefined &&

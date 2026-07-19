@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import Future
+from math import trunc
 from typing import Protocol
 
 from chudvis.actions.base import InputAdapter
@@ -50,6 +51,7 @@ class InteractionController:
         self.latest_gaze: GazeSample | None = None
         self.locked_gaze: GazeSample | None = None
         self._transcription: Future[str] | None = None
+        self._scroll_remainder = 0.0
 
     def _pixels(self, point: Point) -> Point:
         return Point(point.x * self.screen_size[0], point.y * self.screen_size[1])
@@ -142,8 +144,11 @@ class InteractionController:
             self.state = ControllerState.TRACKING
             self.locked_gaze = None
         elif event.type == GestureType.SCROLL and self.state == ControllerState.TRACKING:
-            amount = round(-event.delta.y * self.gestures.scroll_scale)
-            self.input.scroll(amount)
+            scaled = -event.delta.y * self.gestures.scroll_scale + self._scroll_remainder
+            amount = trunc(scaled)
+            self._scroll_remainder = scaled - amount
+            if amount:
+                self.input.scroll(amount)
 
     def poll(self) -> None:
         if self.state != ControllerState.TRANSCRIBING or self._transcription is None:

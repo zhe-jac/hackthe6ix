@@ -38,6 +38,15 @@
         "detail": { "type": "string", "maxLength": 500 }
       }
     },
+    "voiceLevelParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "dbfs"],
+      "properties": {
+        "level": { "type": "number", "minimum": 0, "maximum": 1 },
+        "dbfs": { "type": "number", "minimum": -100, "maximum": 0 }
+      }
+    },
     "requestParams": {
       "type": "object",
       "required": ["requestId"],
@@ -91,6 +100,12 @@
       "if": { "properties": { "method": { "const": "voice.state" } } },
       "then": {
         "properties": { "params": { "$ref": "#/$defs/voiceStateParams" } }
+      }
+    },
+    {
+      "if": { "properties": { "method": { "const": "voice.level" } } },
+      "then": {
+        "properties": { "params": { "$ref": "#/$defs/voiceLevelParams" } }
       }
     },
     {

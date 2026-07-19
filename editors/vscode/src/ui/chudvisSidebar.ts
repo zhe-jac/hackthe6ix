@@ -114,6 +114,16 @@ export class ChudvisSidebar
     void this.publish();
   }
 
+  public setVoiceLevel(level: number, dbfs: number): void {
+    const boundedLevel = Math.max(0, Math.min(1, level));
+    const boundedDbfs = Math.max(-100, Math.min(0, dbfs));
+    void this.view?.webview.postMessage({
+      type: "voiceLevel",
+      level: boundedLevel,
+      dbfs: boundedDbfs,
+    });
+  }
+
   public setControls(running: boolean): void {
     this.state = {
       ...this.state,
@@ -126,6 +136,9 @@ export class ChudvisSidebar
       partial: "",
     };
     void this.publish();
+    if (!running) {
+      this.setVoiceLevel(0, -100);
+    }
   }
 
   public setStarting(starting: boolean): void {
@@ -282,6 +295,10 @@ export class ChudvisSidebar
     .listening .dot { background: var(--vscode-charts-yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-charts-yellow) 25%, transparent); }
     .error .dot { background: var(--vscode-errorForeground); }
     .muted, .label { color: var(--vscode-descriptionForeground); }
+    .microphone { align-items: center; display: grid; gap: 4px 8px; grid-template-columns: auto 1fr auto; margin: 10px 0 2px; }
+    .microphone-label, .microphone-value { color: var(--vscode-descriptionForeground); font-size: .82em; }
+    .microphone-meter { background: var(--vscode-progressBar-background); border-radius: 3px; height: 7px; min-width: 60px; overflow: hidden; }
+    .microphone-fill { background: var(--vscode-charts-green); height: 100%; transform: scaleX(0); transform-origin: left; transition: transform 80ms linear; width: 100%; }
     .label { font-size: .9em; margin-top: 12px; }
     .content { overflow-wrap: anywhere; white-space: pre-wrap; }
     .partial { color: var(--vscode-descriptionForeground); font-style: italic; }
@@ -316,6 +333,11 @@ export class ChudvisSidebar
 <body>
   <div id="stateRow" class="state paused"><span class="dot" aria-hidden="true"></span><strong id="state">Off</strong></div>
   <div id="detail" class="muted"></div>
+  <div class="microphone">
+    <span class="microphone-label">Mic</span>
+    <div id="microphoneMeter" class="microphone-meter" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="microphoneFill" class="microphone-fill"></div></div>
+    <span id="microphoneValue" class="microphone-value">No signal</span>
+  </div>
   <div class="actions controls" aria-label="Chudvis controls">
     <button id="toggleControls" class="primary">Start Controls</button><button id="testTracking">Test Tracking</button><button id="calibrate">Recalibrate Gaze</button>
   </div>
@@ -330,7 +352,7 @@ export class ChudvisSidebar
       </tbody>
     </table>
     <div class="actions service-actions">
-      <button id="configureBackboard">Set Backboard Key</button><button id="configureElevenLabs">Set ElevenLabs Key</button><button id="configureElevenLabsVoice">Choose Voice</button><button id="testElevenLabsVoice">Test Voice</button>
+      <button id="configureBackboard">Set Backboard Key</button><button id="configureElevenLabs">Set ElevenLabs Key</button><button id="configureElevenLabsVoice">Choose Voice Preset</button><button id="testElevenLabsVoice">Test Voice</button>
     </div>
     <p class="service-note">Keys are kept in VS Code secure storage. Workspace .env files are not loaded.</p>
   </details>
@@ -351,13 +373,13 @@ export class ChudvisSidebar
           <th scope="row">Editor hand<span class="default">right by default</span></th>
           <td>
             <div class="guide-action"><strong>Quick pinch</strong><span>Click and select the target symbol.</span></div>
-            <div class="guide-action"><strong>Move an open palm</strong><span>Scroll the active editor.</span></div>
+            <div class="guide-action"><strong>Hold an open palm, then move it</strong><span>Continuously scroll the active editor.</span></div>
             <div class="guide-action"><strong>Hold thumbs-up</strong><span>Approve an edit or use fallback dictation.</span></div>
           </td>
         </tr>
         <tr>
           <th scope="row">Navigator hand<span class="default">left by default</span></th>
-          <td><div class="guide-action"><strong>Move an open palm</strong><span>Previous or next captured change.</span></div></td>
+          <td><div class="guide-action"><strong>Hold an open palm, then move it</strong><span>Previous or next captured change.</span></div></td>
         </tr>
         <tr>
           <th scope="row">Either hand</th>
@@ -378,11 +400,24 @@ export class ChudvisSidebar
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const ids = ['partial', 'transcript', 'target', 'answer', 'summary'];
+    const renderVoiceLevel = (rawLevel, rawDbfs) => {
+      const level = Math.max(0, Math.min(1, Number(rawLevel) || 0));
+      const dbfs = Math.max(-100, Math.min(0, Number(rawDbfs) || -100));
+      const percent = Math.round(level * 100);
+      document.getElementById('microphoneFill').style.transform = 'scaleX(' + level + ')';
+      document.getElementById('microphoneMeter').setAttribute('aria-valuenow', String(percent));
+      document.getElementById('microphoneValue').textContent = dbfs <= -99 ? 'No signal' : Math.round(dbfs) + ' dBFS';
+    };
     for (const action of ['openChanges', 'apply', 'cancel', 'undo', 'clearMemory', 'toggleControls', 'testTracking', 'calibrate', 'showDiagnostics', 'configureBackboard', 'configureElevenLabs', 'configureElevenLabsVoice', 'testElevenLabsVoice']) {
       document.getElementById(action).addEventListener('click', () => vscode.postMessage({ action }));
     }
     window.addEventListener('message', (event) => {
-      if (!event.data || event.data.type !== 'state') return;
+      if (!event.data) return;
+      if (event.data.type === 'voiceLevel') {
+        renderVoiceLevel(event.data.level, event.data.dbfs);
+        return;
+      }
+      if (event.data.type !== 'state') return;
       const state = event.data.state;
       const visibleState = state.controlsStarting ? 'Activating CHUD…' : state.controlsRunning ? state.voiceState[0].toUpperCase() + state.voiceState.slice(1) : 'Off';
       document.getElementById('state').textContent = visibleState;
@@ -392,6 +427,7 @@ export class ChudvisSidebar
       document.getElementById('backboardStatus').textContent = state.backboardStatus;
       document.getElementById('elevenLabsStatus').textContent = state.elevenLabsStatus;
       document.getElementById('elevenLabsVoiceStatus').textContent = state.elevenLabsVoiceStatus;
+      if (!state.controlsRunning) renderVoiceLevel(0, -100);
       for (const id of ids) {
         const value = String(state[id] || '');
         document.getElementById(id).textContent = value;

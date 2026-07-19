@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { createHash } from "node:crypto";
 
 import { VsCodeCliAgentProvider } from "./agent/agentProvider";
 import {
@@ -22,60 +23,28 @@ import { type RuntimeBridgeSettings, type RuntimeMode } from "./runtime/launch";
 import { ChudvisRuntimeManager } from "./runtime/runtimeManager";
 import { ChudvisSidebar } from "./ui/chudvisSidebar";
 import { StatusPresenter } from "./ui/status";
+import {
+  ELEVENLABS_VOICE_PRESETS,
+  getElevenLabsVoicePreset,
+  isElevenLabsVoicePresetId,
+  resolveElevenLabsPresetVoiceIds,
+  type ElevenLabsVoicePresetId,
+} from "./voice/elevenLabsVoicePresets";
 import { parseChudvisInbound } from "./voice/protocol";
 
 let runtime: ExtensionRuntime | undefined;
 const ELEVENLABS_SECRET_KEY = "chudvis.elevenLabsApiKey";
 const ELEVENLABS_ENVIRONMENT_KEY = "ELEVENLABS_API_KEY";
-// Voice availability is account-specific. In particular, ElevenLabs no longer grants
-// its former Rachel default (21m00Tcm4TlvDq8ikWAM) to accounts created after March 2026.
+const ELEVENLABS_PRESET_VOICE_IDS_KEY =
+  "chudvis.elevenLabsNamedPresetVoiceIdsV1";
+const ELEVENLABS_ACCOUNT_FINGERPRINT_KEY =
+  "chudvis.elevenLabsAccountFingerprint";
 const DEFAULT_ELEVENLABS_VOICE_ID = "";
+const DEFAULT_ELEVENLABS_VOICE_PRESET: ElevenLabsVoicePresetId = "chud";
 
-interface ElevenLabsVoice {
-  readonly id: string;
-  readonly name: string;
-  readonly category: string;
-}
-
-function parseElevenLabsVoices(value: unknown): readonly ElevenLabsVoice[] {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    !("voices" in value) ||
-    !Array.isArray(value.voices)
-  ) {
-    throw new Error("ElevenLabs returned an invalid voice list");
-  }
-  const voices = new Map<string, ElevenLabsVoice>();
-  for (const raw of value.voices.slice(0, 100)) {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      continue;
-    }
-    const candidate = raw as Record<string, unknown>;
-    if (
-      typeof candidate.voice_id !== "string" ||
-      candidate.voice_id.length === 0 ||
-      candidate.voice_id.length > 100 ||
-      typeof candidate.name !== "string" ||
-      candidate.name.length === 0 ||
-      candidate.name.length > 200
-    ) {
-      continue;
-    }
-    voices.set(candidate.voice_id, {
-      id: candidate.voice_id,
-      name: candidate.name,
-      category:
-        typeof candidate.category === "string"
-          ? candidate.category.slice(0, 80)
-          : "voice",
-    });
-  }
-  return [...voices.values()].sort((left, right) =>
-    left.name.localeCompare(right.name),
-  );
-}
+type CachedElevenLabsPresetVoiceIds = Readonly<
+  Partial<Record<ElevenLabsVoicePresetId, string>>
+>;
 
 function bridgeOptions(): BridgeServerOptions {
   const configuration = vscode.workspace.getConfiguration("chudvis.bridge");
@@ -375,14 +344,17 @@ class ExtensionRuntime implements vscode.Disposable {
       const voiceConfiguration =
         vscode.workspace.getConfiguration("chudvis.elevenLabs");
       const ttsEnabled = voiceConfiguration.get<boolean>("ttsEnabled", true);
+      const presetId = this.configuredElevenLabsVoicePreset();
+      const preset = getElevenLabsVoicePreset(presetId);
       const voiceId = voiceConfiguration
         .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
         .trim();
+      const presetVoiceId = this.elevenLabsPresetVoiceIds()[presetId];
       const voiceStatus = !ttsEnabled
         ? "Disabled"
-        : voiceId.length === 0
-          ? "Choose a voice"
-          : `Enabled · ${voiceId}`;
+        : voiceId.length > 0 && voiceId === presetVoiceId
+          ? `Enabled · ${preset.label}`
+          : `${preset.label} · resolves on first use`;
       this.sidebar.setServiceStatus(
         backboardConfigured ? "Key saved securely" : "Not configured",
         elevenLabsStatus,
@@ -428,12 +400,12 @@ class ExtensionRuntime implements vscode.Disposable {
   }
 
   private async configureElevenLabsApiKey(
-    chooseVoiceAfterSave = true,
+    selectDefaultVoiceAfterSave = true,
   ): Promise<boolean> {
     const key = await vscode.window.showInputBox({
       title: "Configure ElevenLabs API key",
       prompt:
-        "Stored securely by VS Code and passed only to the native Chudvis process.",
+        'Stored securely by VS Code and passed only to Chudvis. The account must contain voices named exactly "CHUD" and "JARVIS".',
       password: true,
       ignoreFocusOut: true,
       validateInput: (value) =>
@@ -445,10 +417,24 @@ class ExtensionRuntime implements vscode.Disposable {
       return false;
     }
     await this.context.secrets.store(ELEVENLABS_SECRET_KEY, key.trim());
+    await this.synchronizeElevenLabsAccount(key.trim());
     await this.refreshServiceStatus();
     this.report("ElevenLabs API key saved securely for the native runtime");
-    if (chooseVoiceAfterSave) {
-      await this.configureElevenLabsVoice();
+    if (selectDefaultVoiceAfterSave) {
+      try {
+        await this.activateElevenLabsVoicePreset(
+          DEFAULT_ELEVENLABS_VOICE_PRESET,
+          key.trim(),
+        );
+      } catch (error: unknown) {
+        const detail =
+          error instanceof Error ? error.message : "voice lookup failed";
+        this.report(`ElevenLabs default voice setup failed: ${detail}`);
+        void vscode.window.showErrorMessage(
+          `The ElevenLabs key was saved, but Chudvis could not select the default CHUD voice: ${detail}`,
+        );
+        return false;
+      }
     }
     return true;
   }
@@ -470,6 +456,106 @@ class ExtensionRuntime implements vscode.Disposable {
     );
   }
 
+  private configuredElevenLabsVoicePreset(): ElevenLabsVoicePresetId {
+    const value = vscode.workspace
+      .getConfiguration("chudvis.elevenLabs")
+      .get<unknown>("voicePreset", DEFAULT_ELEVENLABS_VOICE_PRESET);
+    return isElevenLabsVoicePresetId(value)
+      ? value
+      : DEFAULT_ELEVENLABS_VOICE_PRESET;
+  }
+
+  private elevenLabsPresetVoiceIds(): CachedElevenLabsPresetVoiceIds {
+    const value = this.context.globalState.get<unknown>(
+      ELEVENLABS_PRESET_VOICE_IDS_KEY,
+    );
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return {};
+    }
+    const record = value as Record<string, unknown>;
+    const result: Partial<Record<ElevenLabsVoicePresetId, string>> = {};
+    for (const preset of ELEVENLABS_VOICE_PRESETS) {
+      const voiceId = record[preset.id];
+      if (
+        typeof voiceId === "string" &&
+        voiceId.length > 0 &&
+        voiceId.length <= 100
+      ) {
+        result[preset.id] = voiceId;
+      }
+    }
+    return result;
+  }
+
+  private async synchronizeElevenLabsAccount(apiKey: string): Promise<void> {
+    const fingerprint = createHash("sha256")
+      .update(apiKey)
+      .digest("hex")
+      .slice(0, 24);
+    const previous = this.context.globalState.get<string>(
+      ELEVENLABS_ACCOUNT_FINGERPRINT_KEY,
+    );
+    if (previous !== undefined && previous !== fingerprint) {
+      await this.context.globalState.update(
+        ELEVENLABS_PRESET_VOICE_IDS_KEY,
+        {},
+      );
+      await vscode.workspace
+        .getConfiguration("chudvis.elevenLabs")
+        .update("voiceId", "", vscode.ConfigurationTarget.Global);
+    }
+    if (previous !== fingerprint) {
+      await this.context.globalState.update(
+        ELEVENLABS_ACCOUNT_FINGERPRINT_KEY,
+        fingerprint,
+      );
+    }
+  }
+
+  private async activateElevenLabsVoicePreset(
+    presetId: ElevenLabsVoicePresetId,
+    apiKey: string,
+  ): Promise<void> {
+    await this.synchronizeElevenLabsAccount(apiKey);
+    const preset = getElevenLabsVoicePreset(presetId);
+    const voiceIds = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Finding the CHUD and JARVIS voices in ElevenLabs…",
+        cancellable: false,
+      },
+      () => resolveElevenLabsPresetVoiceIds(apiKey),
+    );
+    await this.context.globalState.update(
+      ELEVENLABS_PRESET_VOICE_IDS_KEY,
+      voiceIds,
+    );
+    const voiceId = voiceIds[presetId];
+
+    const configuration =
+      vscode.workspace.getConfiguration("chudvis.elevenLabs");
+    await configuration.update(
+      "voicePreset",
+      presetId,
+      vscode.ConfigurationTarget.Global,
+    );
+    await configuration.update(
+      "voiceId",
+      voiceId,
+      vscode.ConfigurationTarget.Global,
+    );
+    await configuration.update(
+      "ttsEnabled",
+      true,
+      vscode.ConfigurationTarget.Global,
+    );
+    await this.refreshServiceStatus();
+    if (this.perception.activeMode === "ide") {
+      await this.perception.restart();
+    }
+    this.report(`ElevenLabs feedback voice set to ${preset.label}`);
+  }
+
   private async configureElevenLabsVoice(): Promise<void> {
     try {
       let key = await this.effectiveElevenLabsApiKey();
@@ -482,48 +568,22 @@ class ExtensionRuntime implements vscode.Disposable {
       if (key === undefined) {
         throw new Error("ElevenLabs API key is not configured");
       }
-      const response = await fetch(
-        "https://api.elevenlabs.io/v2/voices?page_size=100&sort=name&sort_direction=asc&include_total_count=false",
-        {
-          headers: { "xi-api-key": key },
-          signal: AbortSignal.timeout(15_000),
-        },
-      );
-      if (!response.ok) {
-        throw new Error(
-          `ElevenLabs voice lookup failed with HTTP ${response.status}`,
-        );
-      }
-      const voices = parseElevenLabsVoices(await response.json());
-      const configuration =
-        vscode.workspace.getConfiguration("chudvis.elevenLabs");
-      const currentId = configuration.get<string>(
-        "voiceId",
-        DEFAULT_ELEVENLABS_VOICE_ID,
-      );
-      const choices = [
-        {
-          label: "$(mute) Disable spoken feedback",
-          description:
-            "Keep transcription enabled without playing completion summaries",
-          action: "disable" as const,
-        },
-        {
-          label: "$(edit) Enter a voice ID",
-          description: "Use a voice ID copied from ElevenLabs",
-          action: "manual" as const,
-        },
-        ...voices.map((voice) => ({
-          label: voice.name,
-          description: `${voice.category}${voice.id === currentId ? " · current" : ""}`,
-          detail: voice.id,
-          action: "voice" as const,
-          voice,
-        })),
-      ];
+      await this.synchronizeElevenLabsAccount(key);
+      const currentPreset = this.configuredElevenLabsVoicePreset();
+      const knownVoiceIds = this.elevenLabsPresetVoiceIds();
+      const choices = ELEVENLABS_VOICE_PRESETS.map((preset, index) => ({
+        label: `${preset.id === "chud" ? "$(person)" : "$(hubot)"} ${preset.label}`,
+        description: `${preset.description}${preset.id === currentPreset ? " · current" : ""}`,
+        detail:
+          knownVoiceIds[preset.id] === undefined
+            ? `Looks up the account voice named ${preset.accountVoiceName}`
+            : `Ready · account voice ${preset.accountVoiceName}`,
+        preset,
+        picked: index === 0,
+      }));
       const selected = await vscode.window.showQuickPick(choices, {
         title: "Choose the ElevenLabs voice for Chudvis feedback",
-        placeHolder: "The selected voice is used for short action summaries",
+        placeHolder: "CHUD is the default",
         ignoreFocusOut: true,
         matchOnDescription: true,
         matchOnDetail: true,
@@ -531,54 +591,7 @@ class ExtensionRuntime implements vscode.Disposable {
       if (selected === undefined) {
         return;
       }
-      let selectedId: string | undefined;
-      let selectedName = "Spoken feedback disabled";
-      if (selected.action === "manual") {
-        selectedId = await vscode.window.showInputBox({
-          title: "Enter an ElevenLabs voice ID",
-          value: currentId,
-          ignoreFocusOut: true,
-          validateInput: (value) =>
-            /^[A-Za-z0-9_-]{5,100}$/u.test(value.trim())
-              ? undefined
-              : "Enter a valid ElevenLabs voice ID",
-        });
-        if (selectedId === undefined) {
-          return;
-        }
-        selectedId = selectedId.trim();
-        selectedName = selectedId;
-      } else if (selected.action === "voice") {
-        selectedId = selected.voice.id;
-        selectedName = selected.voice.name;
-      }
-      if (selectedId === undefined) {
-        await configuration.update(
-          "ttsEnabled",
-          false,
-          vscode.ConfigurationTarget.Global,
-        );
-      } else {
-        await configuration.update(
-          "voiceId",
-          selectedId,
-          vscode.ConfigurationTarget.Global,
-        );
-        await configuration.update(
-          "ttsEnabled",
-          true,
-          vscode.ConfigurationTarget.Global,
-        );
-      }
-      await this.refreshServiceStatus();
-      if (this.perception.activeMode === "ide") {
-        await this.perception.restart();
-      }
-      this.report(
-        selectedId === undefined
-          ? selectedName
-          : `ElevenLabs feedback voice set to ${selectedName}`,
-      );
+      await this.activateElevenLabsVoicePreset(selected.preset.id, key);
     } catch (error: unknown) {
       const detail =
         error instanceof Error ? error.message : "voice configuration failed";
@@ -604,7 +617,7 @@ class ExtensionRuntime implements vscode.Disposable {
     ) {
       void vscode.window
         .showWarningMessage(
-          "Choose an ElevenLabs voice available to this account before testing spoken feedback.",
+          "Resolve the CHUD or JARVIS account voice before testing spoken feedback.",
           "Choose Voice",
         )
         .then((action) => {
@@ -636,10 +649,8 @@ class ExtensionRuntime implements vscode.Disposable {
     if (!voiceEnabled) {
       return true;
     }
-    const keyConfigured =
-      (await this.savedElevenLabsApiKey()) !== undefined ||
-      this.inheritedElevenLabsApiKey() !== undefined;
-    if (!keyConfigured) {
+    const key = await this.effectiveElevenLabsApiKey();
+    if (key === undefined) {
       const action = await vscode.window.showWarningMessage(
         "ElevenLabs is not configured. Wake-word realtime speech will be unavailable; gaze, gestures, and local thumbs-up dictation can still run.",
         "Set ElevenLabs Key",
@@ -650,30 +661,44 @@ class ExtensionRuntime implements vscode.Disposable {
       }
       return action === "Start with Local Fallback";
     }
+    await this.synchronizeElevenLabsAccount(key);
     const voiceConfiguration =
       vscode.workspace.getConfiguration("chudvis.elevenLabs");
+    if (!voiceConfiguration.get<boolean>("ttsEnabled", true)) {
+      return true;
+    }
+    const presetId = this.configuredElevenLabsVoicePreset();
+    const voiceId = voiceConfiguration
+      .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
+      .trim();
     if (
-      !voiceConfiguration.get<boolean>("ttsEnabled", true) ||
-      voiceConfiguration
-        .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
-        .trim().length > 0
+      this.elevenLabsPresetVoiceIds()[presetId] === voiceId &&
+      voiceId.length > 0
     ) {
       return true;
     }
-    const action = await vscode.window.showWarningMessage(
-      "ElevenLabs transcription is configured, but TTS needs a voice that is available to this account.",
-      "Choose Voice",
-      "Start without Spoken Feedback",
-    );
-    if (action === "Choose Voice") {
-      await this.configureElevenLabsVoice();
-      return (
-        voiceConfiguration
-          .get<string>("voiceId", DEFAULT_ELEVENLABS_VOICE_ID)
-          .trim().length > 0
+    try {
+      await this.activateElevenLabsVoicePreset(presetId, key);
+      return true;
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error ? error.message : "voice lookup failed";
+      this.report(`ElevenLabs preset voice setup failed: ${detail}`);
+      const action = await vscode.window.showWarningMessage(
+        `Chudvis could not find the ${getElevenLabsVoicePreset(presetId).label} account voice. ${detail}`,
+        "Start without Spoken Feedback",
       );
+      if (action !== "Start without Spoken Feedback") {
+        return false;
+      }
+      await voiceConfiguration.update(
+        "ttsEnabled",
+        false,
+        vscode.ConfigurationTarget.Global,
+      );
+      await this.refreshServiceStatus();
+      return true;
     }
-    return action === "Start without Spoken Feedback";
   }
 
   private async dispatch(notification: BridgeNotification): Promise<void> {
@@ -694,7 +719,10 @@ class ExtensionRuntime implements vscode.Disposable {
     }
     const voice = parseChudvisInbound(notification);
     if (voice !== undefined) {
-      if (voice.method === "voice.partial") {
+      if (voice.method === "voice.level") {
+        this.sidebar.setVoiceLevel(voice.level, voice.dbfs);
+        return;
+      } else if (voice.method === "voice.partial") {
         this.diagnostics.record(
           "speech",
           "transcript.partial",

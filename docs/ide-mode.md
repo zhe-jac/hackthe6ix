@@ -67,6 +67,11 @@ commands. Both credentials stay in VS Code SecretStorage. The extension passes t
 ElevenLabs key only to its supervised native process; an existing `ELEVENLABS_API_KEY` in the native
 VS Code host environment is also accepted. Workspace `.env` files are not loaded.
 
+Spoken feedback defaults to the existing account voice named exactly **CHUD**. The voice picker
+contains only CHUD and **JARVIS**, and resolves those exact names to their account-specific voice
+IDs. Chudvis does not create voices; a missing or duplicate exact name blocks preset selection with
+a setup error.
+
 On first bridge start, the extension presents a native modal disclosure that post-activation audio
 goes to ElevenLabs and resolved source/context goes to Backboard. Declining leaves the bridge
 stopped. The sidebar reports whether each credential is saved or inherited from the host

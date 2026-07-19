@@ -29,8 +29,10 @@ or either hand.
 The sidebar also shows Backboard and ElevenLabs setup status. Enter either key there or use the
 matching **Configure ... API Key** command; both are stored in VS Code SecretStorage. The saved
 ElevenLabs key is injected only into the supervised native process. Workspace `.env` files are not
-loaded. Use **Choose Voice** to select or disable the ElevenLabs voice and **Test Voice** to verify
-playback while controls are running. The sidebar also shows microphone/request state, partial
+loaded. The ElevenLabs account must contain voices named exactly **CHUD** and **JARVIS**. Chudvis
+uses CHUD by default; use **Choose Voice Preset** to switch between those two account voices and
+**Test Voice** to verify playback while controls are running. The sidebar also shows
+microphone/request state, partial
 transcripts, answers, edit targets, applied summaries, review actions, Undo, and Clear Memory.
 Questions remain silent; successful file creation and code edits can produce a short ElevenLabs TTS
 summary.

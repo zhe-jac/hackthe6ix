@@ -1,5 +1,6 @@
 import {
   type BridgeNotification,
+  numberParam,
   ProtocolError,
   stringParam,
 } from "../bridge/messages";
@@ -23,6 +24,11 @@ export type ChudvisInbound =
       readonly state: VoiceState;
       readonly requestId: string | undefined;
       readonly detail: string;
+    }
+  | {
+      readonly method: "voice.level";
+      readonly level: number;
+      readonly dbfs: number;
     }
   | {
       readonly method: "voice.partial";
@@ -83,6 +89,14 @@ export function parseChudvisInbound(
         requestId: id,
         detail: optionalString(params, "detail", 500) ?? "",
       };
+    }
+    case "voice.level": {
+      const level = numberParam(params, "level");
+      const dbfs = numberParam(params, "dbfs");
+      if (level < 0 || level > 1 || dbfs < -100 || dbfs > 0) {
+        throw new ProtocolError("Bridge microphone level is invalid");
+      }
+      return { method: "voice.level", level, dbfs };
     }
     case "voice.partial": {
       const text = stringParam(params, "text");

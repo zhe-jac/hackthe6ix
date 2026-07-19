@@ -5,7 +5,12 @@ from chudvis.core.events import GestureType, HandObservation, HandRole, Point
 from chudvis.gestures.router import HandGestureRouter
 
 
-def _hand(kind: str, handedness: str, timestamp: float) -> HandObservation:
+def _hand(
+    kind: str,
+    handedness: str,
+    timestamp: float,
+    shift_y: float = 0.0,
+) -> HandObservation:
     points = [Point(0.5, 0.7) for _ in range(21)]
     points[0] = Point(0.5, 0.9)
     points[5] = Point(0.4, 0.62)
@@ -17,6 +22,12 @@ def _hand(kind: str, handedness: str, timestamp: float) -> HandObservation:
     if kind == "pinch":
         points[4] = Point(0.49, 0.45)
         points[8] = Point(0.51, 0.45)
+    elif kind == "open":
+        points = [Point(point.x, point.y + shift_y) for point in points]
+        for tip, pip, x in ((8, 6, 0.4), (12, 10, 0.48), (16, 14, 0.56), (20, 18, 0.64)):
+            points[pip] = Point(x, 0.62 + shift_y)
+            points[tip] = Point(x, 0.30 + shift_y)
+        points[4] = Point(0.30, 0.52 + shift_y)
     return HandObservation(tuple(points), handedness, 0.95, timestamp)
 
 
@@ -54,6 +65,26 @@ def test_hand_roles_can_be_swapped() -> None:
 
     assert len(events) == 1
     assert events[0].role == HandRole.NAVIGATOR
+
+
+def test_editor_hand_scroll_is_recognized_through_runtime_router() -> None:
+    router = HandGestureRouter(
+        GestureSettings(
+            scroll_arm_seconds=0.3,
+            scroll_deadzone=0.01,
+            scroll_event_interval_seconds=0.05,
+        ),
+        IdeSettings(),
+    )
+
+    assert router.update((_hand("open", "right", 0.0),), 0.0) == []
+    assert router.update((_hand("open", "right", 0.31),), 0.31) == []
+    events = router.update((_hand("open", "right", 0.4, shift_y=0.03),), 0.4)
+
+    assert len(events) == 1
+    assert events[0].role == HandRole.EDITOR
+    assert events[0].gesture.type == GestureType.SCROLL
+    assert events[0].gesture.delta.y > 0
 
 
 def test_duplicate_hand_mapping_is_rejected() -> None:

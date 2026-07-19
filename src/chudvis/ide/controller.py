@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import Future
 from enum import Enum
+from math import trunc
 
 from chudvis.actions.base import InputAdapter
 from chudvis.core.config import GestureSettings, IdeSettings
@@ -63,6 +64,7 @@ class IdeInteractionController:
         self.locked_gaze: GazeSample | None = None
         self._transcription: Future[str] | None = None
         self._last_navigation_at = -1e9
+        self._editor_scroll_remainder = 0.0
         self._active_voice_request: str | None = None
         self._approval_pending = False
 
@@ -243,7 +245,12 @@ class IdeInteractionController:
             self.ide.cancel_selection()
             self._gesture_action(event, "selection.cancel", "executed")
         elif gesture.type == GestureType.SCROLL:
-            lines = round(gesture.delta.y * self.gestures.scroll_scale)
+            scaled = (
+                gesture.delta.y * self.gestures.scroll_scale
+                + self._editor_scroll_remainder
+            )
+            lines = trunc(scaled)
+            self._editor_scroll_remainder = scaled - lines
             if lines:
                 self.ide.scroll_editor(lines)
                 self._gesture_action(event, "editor.scroll", "executed", lines=lines)
@@ -315,6 +322,8 @@ class IdeInteractionController:
                         self._approval_pending = False
                         if self.state != IdeControllerState.PAUSED:
                             self.state = IdeControllerState.TRACKING
+                elif event.type == VoiceEventType.LEVEL:
+                    self.ide.voice_level(event.level, event.dbfs)
                 elif event.type == VoiceEventType.PARTIAL and event.request_id is not None:
                     self._diagnostic(
                         "speech",

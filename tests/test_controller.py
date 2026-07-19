@@ -87,6 +87,21 @@ def test_drag_uses_hand_delta_after_gaze_lock() -> None:
     assert controller.state == ControllerState.TRACKING
 
 
+def test_scroll_moves_the_desktop_and_preserves_fractional_motion() -> None:
+    adapter = RecordingInputAdapter()
+    controller = InteractionController(
+        adapter,
+        (1000, 500),
+        GestureSettings(scroll_scale=10.0),
+    )
+
+    controller.on_gesture(_event(GestureType.SCROLL, 0.0, Point(0.0, -0.04)))
+    controller.on_gesture(_event(GestureType.SCROLL, 0.1, Point(0.0, -0.04)))
+    controller.on_gesture(_event(GestureType.SCROLL, 0.2, Point(0.0, -0.04)))
+
+    assert adapter.events == [("scroll", 1)]
+
+
 def test_pause_blocks_clicks_until_resumed() -> None:
     adapter = RecordingInputAdapter()
     controller = InteractionController(

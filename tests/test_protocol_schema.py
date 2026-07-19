@@ -14,9 +14,15 @@ def test_shared_protocol_schema_matches_notification_envelope() -> None:
     assert set(message) == set(schema["required"])
     assert message["jsonrpc"] == schema["properties"]["jsonrpc"]["const"]
     assert "listening" in schema["$defs"]["voiceStateParams"]["properties"]["state"]["enum"]
+    assert schema["$defs"]["voiceLevelParams"]["properties"]["level"]["maximum"] == 1
     assert any(
         rule.get("if", {}).get("properties", {}).get("method", {}).get("const")
         == "voice.complete"
+        for rule in schema["allOf"]
+    )
+    assert any(
+        rule.get("if", {}).get("properties", {}).get("method", {}).get("const")
+        == "voice.level"
         for rule in schema["allOf"]
     )
     assert any(

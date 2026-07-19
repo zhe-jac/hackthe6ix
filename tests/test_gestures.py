@@ -89,7 +89,6 @@ def test_open_palm_motion_scrolls() -> None:
         GestureSettings(
             scroll_arm_seconds=0.3,
             scroll_deadzone=0.01,
-            scroll_activation_distance=0.03,
         )
     )
 
@@ -107,7 +106,6 @@ def test_open_palm_jitter_does_not_continuously_scroll() -> None:
         GestureSettings(
             scroll_arm_seconds=0.2,
             scroll_deadzone=0.01,
-            scroll_activation_distance=0.04,
         )
     )
     engine.update(_hand("open", 0.0), 0.0)
@@ -125,7 +123,6 @@ def test_scroll_events_are_rate_limited() -> None:
         GestureSettings(
             scroll_arm_seconds=0.1,
             scroll_deadzone=0.005,
-            scroll_activation_distance=0.02,
             scroll_event_interval_seconds=0.2,
         )
     )
@@ -136,6 +133,71 @@ def test_scroll_events_are_rate_limited() -> None:
 
     assert _types(first) == [GestureType.SCROLL]
     assert second == []
+
+
+def test_open_palm_hold_enters_persistent_scroll_mode() -> None:
+    engine = GestureEngine(
+        GestureSettings(
+            scroll_arm_seconds=0.3,
+            scroll_deadzone=0.01,
+            scroll_event_interval_seconds=0.05,
+        )
+    )
+
+    engine.update(_hand("open", 0.0), 0.0)
+    assert engine.current_mode == "open_palm_arming"
+    assert engine.update(_hand("open", 0.2, shift_y=0.04), 0.2) == []
+
+    assert engine.update(_hand("open", 0.31, shift_y=0.04), 0.31) == []
+    assert engine.current_mode == "scroll_armed"
+
+    first = engine.update(_hand("open", 0.40, shift_y=0.06), 0.40)
+    second = engine.update(_hand("open", 0.46, shift_y=0.08), 0.46)
+
+    assert _types(first) == [GestureType.SCROLL]
+    assert _types(second) == [GestureType.SCROLL]
+    assert first[0].delta.y > 0
+    assert second[0].delta.y > 0
+    assert engine.current_mode == "scrolling"
+
+
+def test_slow_palm_motion_is_accumulated_after_scroll_arms() -> None:
+    engine = GestureEngine(
+        GestureSettings(
+            scroll_arm_seconds=0.2,
+            scroll_deadzone=0.01,
+            scroll_event_interval_seconds=0.05,
+        )
+    )
+    engine.update(_hand("open", 0.0), 0.0)
+    engine.update(_hand("open", 0.21), 0.21)
+
+    assert engine.update(_hand("open", 0.27, shift_y=0.003), 0.27) == []
+    assert engine.update(_hand("open", 0.33, shift_y=0.006), 0.33) == []
+    assert engine.update(_hand("open", 0.39, shift_y=0.009), 0.39) == []
+    events = engine.update(_hand("open", 0.45, shift_y=0.012), 0.45)
+
+    assert _types(events) == [GestureType.SCROLL]
+    assert events[0].delta.y >= 0.01
+
+
+def test_active_scroll_does_not_turn_into_pause_when_palm_stops() -> None:
+    engine = GestureEngine(
+        GestureSettings(
+            scroll_arm_seconds=0.2,
+            scroll_deadzone=0.01,
+            scroll_event_interval_seconds=0.05,
+            open_hold_seconds=0.5,
+        )
+    )
+    engine.update(_hand("open", 0.0), 0.0)
+    engine.update(_hand("open", 0.21), 0.21)
+    assert _types(engine.update(_hand("open", 0.3, shift_y=0.03), 0.3)) == [
+        GestureType.SCROLL
+    ]
+
+    assert engine.update(_hand("open", 1.0, shift_y=0.03), 1.0) == []
+    assert engine.current_mode == "scrolling"
 
 
 def test_thumbs_up_toggles_dictation_once() -> None:

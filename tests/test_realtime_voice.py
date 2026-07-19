@@ -161,6 +161,22 @@ def test_float_audio_is_clipped_and_encoded_as_little_endian_pcm16() -> None:
     assert values == [-32767, -32767, 0, 16383, 32767, 32767]
 
 
+def test_microphone_level_is_reported_after_capture_forwarding() -> None:
+    harness = Harness()
+    try:
+        harness.events_until(lambda events: state_seen(events, VoiceState.READY))
+        harness.stream.push(0.1)
+        events = harness.events_until(
+            lambda values: any(event.type == VoiceEventType.LEVEL for event in values)
+        )
+
+        level = next(event for event in events if event.type == VoiceEventType.LEVEL)
+        assert level.dbfs == pytest.approx(-20.0, abs=0.1)
+        assert level.level == pytest.approx(2 / 3, abs=0.01)
+    finally:
+        harness.close()
+
+
 def test_elevenlabs_tts_buffers_pcm_samples_split_across_http_chunks(
     monkeypatch: Any,
 ) -> None:

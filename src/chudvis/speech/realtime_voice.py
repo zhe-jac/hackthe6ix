@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import multiprocessing
 import os
 import queue
@@ -32,6 +33,7 @@ class VoiceState(str, Enum):
 
 class VoiceEventType(str, Enum):
     STATE = "state"
+    LEVEL = "level"
     PARTIAL = "partial"
     REQUEST = "request"
 
@@ -43,6 +45,8 @@ class VoiceEvent:
     state: VoiceState | None = None
     text: str = ""
     detail: str = ""
+    level: float = 0.0
+    dbfs: float = -100.0
 
 
 class RealtimeSttTransport(Protocol):
@@ -547,6 +551,7 @@ class VoiceSession:
         self.max_audio_queue_depth = 0
         self._capture_error = ""
         self._last_reported_audio_loss = 0
+        self._last_audio_level_at = 0.0
 
     @property
     def state(self) -> VoiceState:
@@ -619,6 +624,13 @@ class VoiceSession:
         if self.capture_overflows or self.capture_dropped_chunks:
             self._report_audio_loss()
         copied = samples.copy().reshape(-1)
+        now = monotonic()
+        if copied.size and now - self._last_audio_level_at >= 0.1:
+            rms = float((copied * copied).mean()) ** 0.5
+            dbfs = max(-100.0, min(0.0, 20.0 * math.log10(max(rms, 1e-7))))
+            level = max(0.0, min(1.0, (dbfs + 60.0) / 60.0))
+            self._last_audio_level_at = now
+            self._emit(VoiceEvent(VoiceEventType.LEVEL, level=level, dbfs=dbfs))
         try:
             self._audio.put_nowait(copied)
         except queue.Full:

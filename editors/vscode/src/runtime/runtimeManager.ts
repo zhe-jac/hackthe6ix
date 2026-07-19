@@ -9,11 +9,15 @@ import {
   type RuntimeBridgeSettings,
   type RuntimeLaunchSettings,
   type RuntimeMode,
+  mergeRuntimeEnvironment,
   runtimeLaunchPlan,
 } from "./launch";
 
 type RuntimeStateListener = (detail: string) => void;
 type RuntimeExitListener = (mode: RuntimeMode, code: number | null) => void;
+type SecretEnvironmentProvider = () => Promise<
+  Readonly<Record<string, string>>
+>;
 
 export interface CalibrationQuality {
   readonly medianErrorPx: number;
@@ -42,6 +46,7 @@ export class ChudvisRuntimeManager implements vscode.Disposable {
     private readonly output: vscode.OutputChannel,
     private readonly onState: RuntimeStateListener,
     private readonly onExit: RuntimeExitListener,
+    private readonly getSecretEnvironment: SecretEnvironmentProvider,
   ) {}
 
   public get running(): boolean {
@@ -159,7 +164,11 @@ export class ChudvisRuntimeManager implements vscode.Disposable {
       this.context.globalStorageUri.fsPath,
       this.settings(mode, bridge),
     );
-    const environment = { ...process.env, ...plan.environment };
+    const environment = mergeRuntimeEnvironment(
+      process.env,
+      plan.environment,
+      await this.getSecretEnvironment(),
+    );
     this.stopping = false;
     this.mode = mode;
     this.bridge = bridge;

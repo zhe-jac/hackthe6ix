@@ -300,8 +300,20 @@ export class BackboardProvider implements ModelProvider {
     await this.context.secrets.store(SECRET_KEY, key.trim());
     this.client = undefined;
     this.validatedModels = undefined;
-    await this.ensureModels();
+    try {
+      await this.ensureModels();
+    } catch (error: unknown) {
+      await this.context.secrets.delete(SECRET_KEY);
+      this.client = undefined;
+      this.validatedModels = undefined;
+      throw error;
+    }
     return true;
+  }
+
+  public async hasApiKey(): Promise<boolean> {
+    const key = await this.context.secrets.get(SECRET_KEY);
+    return key !== undefined && key.trim().length > 0;
   }
 
   public async clearApiKey(): Promise<void> {

@@ -68,19 +68,28 @@ Restart VS Code after changing the Windows `PATH`. On its first native launch, C
 isolated environment under `%LOCALAPPDATA%\Chudvis\windows-venv` and downloads the required Python
 and model assets. The repository's WSL or Linux `.venv` is not used by the extension.
 
-### 2. Configure voice services
+### 2. Configure AI and voice services
 
 Gaze and hand controls do not require cloud credentials. For the complete voice workflow:
 
-1. Set `ELEVENLABS_API_KEY` in the environment that launches VS Code.
-2. Run **Chudvis: Configure Backboard API Key** from the Command Palette.
-3. Restart VS Code after adding or changing the ElevenLabs environment variable.
+1. Open **AI and voice setup** in the Chudvis sidebar.
+2. Choose **Set Backboard Key**. Chudvis validates the key and configured models.
+3. Choose **Set ElevenLabs Key**. Chudvis passes it securely to the native runtime on Start.
 
-On Windows, a persistent user variable can be set with:
+Both keys are stored in VS Code SecretStorage and their setup state is shown in the sidebar. Chudvis
+does not load workspace `.env` files. This avoids confusing WSL environment files with the native
+Windows process and prevents workspace code from reading service credentials.
+
+An existing `ELEVENLABS_API_KEY` in the native VS Code host environment remains supported as a
+fallback. On Windows, it can be set with:
 
 ```powershell
 [Environment]::SetEnvironmentVariable("ELEVENLABS_API_KEY", "your-key", "User")
 ```
+
+Restart VS Code after changing a host environment variable. A key entered in the sidebar does not
+require a restart; it is used the next time controls start. Backboard is never read from an
+environment variable—it is an extension-side credential used only for questions and edits.
 
 The first time live controls start, the extension shows a disclosure describing what is processed
 locally and what is sent to ElevenLabs and Backboard. Declining leaves Chudvis stopped. If wake-word
@@ -143,7 +152,8 @@ never enable live controls automatically.
 The left sidebar is both the quick-start surface and the request/review interface. It includes:
 
 - Synchronized **Start/Stop Controls**, **Test Tracking**, and **Recalibrate Gaze** buttons
-- A visible guide that labels every action as no-hand, editor-hand, navigator-hand, or either-hand
+- A compact table grouping actions under no hand, editor hand, navigator hand, or either hand
+- Backboard and ElevenLabs setup status with secure key-entry buttons
 - Live voice state and partial transcription
 - The current request, resolved source target, and streamed answer
 - Apply, Cancel, Open Changes, guarded Undo, and Clear Memory actions
@@ -164,6 +174,8 @@ The same actions are available from the Command Palette:
 | **Chudvis: Next Captured Change** / **Chudvis: Previous Captured Change** | Navigate captured files and change ranges                     |
 | **Chudvis: Configure Backboard API Key**                                  | Store and validate the Backboard key in VS Code SecretStorage |
 | **Chudvis: Clear Backboard API Key**                                      | Remove the key from VS Code SecretStorage                     |
+| **Chudvis: Configure ElevenLabs API Key**                                 | Store the ElevenLabs key for the native runtime               |
+| **Chudvis: Clear ElevenLabs API Key**                                     | Remove the saved ElevenLabs key                               |
 | **Chudvis: Clear Editing Memory**                                         | Delete the workspace editing thread and its saved IDs         |
 
 The bridge-only Start/Stop commands are troubleshooting tools. **Start IDE Bridge** does not start
@@ -339,6 +351,8 @@ inside the extension.
 - Before the wake word, microphone audio is consumed only by the local Sherpa ONNX detector.
 - After wake activation, microphone audio is sent to ElevenLabs for realtime transcription.
 - The extension sends only bounded, resolved source context to Backboard for questions and edits.
+- Service keys entered in the sidebar are stored in VS Code SecretStorage; workspace `.env` files
+  are deliberately not loaded.
 - Backboard receives no shell or terminal tool and cannot create, delete, or rename files directly.
 - Questions use temporary threads with memory disabled; the workspace editing thread can be cleared
   from the sidebar or Command Palette.
@@ -357,7 +371,7 @@ inside the extension.
 | Tracking is shaky or does not match diagnostics        | Recalibrate from the extension, keep camera/head/display geometry unchanged, check median/p95 error in **Test Tracking**, improve frontal lighting, and verify the selected camera. |
 | Calibration exists in WSL but the extension asks again | The Linux and Windows profiles are separate. Run **Recalibrate Gaze** from the extension to create the native Windows profile.                                                      |
 | Webcam works in Windows but not plain WSL Python       | Use the extension or `scripts/chudvis-windows.sh`; WSL usually has no native Windows webcam device or global Windows input access.                                                  |
-| Voice never activates                                  | Set `ELEVENLABS_API_KEY` in the VS Code host environment, restart VS Code, configure the Backboard key, and check the Chudvis output channel.                                       |
+| Voice never activates                                  | Check **AI and voice setup** in the sidebar, set the ElevenLabs key, restart controls, and inspect the Chudvis output channel.                                                      |
 | The shortcut conflicts with another application        | Click the sidebar/status-bar toggle, run **Chudvis: Toggle Controls**, or change the keybinding in VS Code.                                                                         |
 
 ## Development

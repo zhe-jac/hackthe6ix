@@ -61,13 +61,16 @@ roles, and use `chudvis test --ide` to confirm the labels before enabling action
 
 ## Cloud setup and disclosure
 
-The packaged extension runtime installs the voice extra in its isolated environment. Set
-`ELEVENLABS_API_KEY` for the native process that launches VS Code, and run **Chudvis: Configure
-Backboard API Key** in VS Code. On first bridge start, the extension presents a native modal
-disclosure that post-activation audio goes to ElevenLabs and resolved source/context goes to
-Backboard. Declining leaves the bridge stopped. Backboard credentials stay in SecretStorage; the
-ElevenLabs credential is read from the environment name configured by
-`voice.elevenlabs_api_key_env`.
+The packaged extension runtime installs the voice extra in its isolated environment. Configure
+Backboard and ElevenLabs from **AI and voice setup** in the sidebar or the matching Command Palette
+commands. Both credentials stay in VS Code SecretStorage. The extension passes the saved
+ElevenLabs key only to its supervised native process; an existing `ELEVENLABS_API_KEY` in the native
+VS Code host environment is also accepted. Workspace `.env` files are not loaded.
+
+On first bridge start, the extension presents a native modal disclosure that post-activation audio
+goes to ElevenLabs and resolved source/context goes to Backboard. Declining leaves the bridge
+stopped. The sidebar reports whether each credential is saved or inherited from the host
+environment without exposing its value.
 
 The default voice timings and limits are represented in `config.example.json`. Set
 `voice.wake_word_enabled` to `false` to use only the local Whisper gesture fallback. The wake model

@@ -25,6 +25,14 @@ export interface RuntimeLaunchPlan {
   readonly environment: Readonly<Record<string, string>>;
 }
 
+export function mergeRuntimeEnvironment(
+  inherited: Readonly<NodeJS.ProcessEnv>,
+  plan: Readonly<Record<string, string>>,
+  secrets: Readonly<Record<string, string>>,
+): NodeJS.ProcessEnv {
+  return { ...inherited, ...plan, ...secrets };
+}
+
 function chudvisArguments(settings: RuntimeLaunchSettings): string[] {
   if (settings.mode === "calibrate") {
     return ["calibrate", ...settings.extraArguments];

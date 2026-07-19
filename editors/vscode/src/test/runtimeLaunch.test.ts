@@ -1,7 +1,7 @@
 import * as assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { runtimeLaunchPlan } from "../runtime/launch";
+import { mergeRuntimeEnvironment, runtimeLaunchPlan } from "../runtime/launch";
 
 void test("Windows launches the packaged native PowerShell runtime", () => {
   const plan = runtimeLaunchPlan("win32", "C:\\ext\\runtime", "C:\\state", {
@@ -41,4 +41,16 @@ void test("diagnostics use the same two-hand tracker as IDE mode", () => {
   assert.equal(plan.command, "uv");
   assert.deepEqual(plan.args.slice(-3), ["chudvis", "test", "--ide"]);
   assert.equal(plan.environment.UV_PROJECT_ENVIRONMENT, "/state/venv");
+});
+
+void test("saved service credentials override the inherited host environment", () => {
+  const environment = mergeRuntimeEnvironment(
+    { ELEVENLABS_API_KEY: "inherited", PATH: "host-path" },
+    { CHUDVIS_IDE_PORT: "49152" },
+    { ELEVENLABS_API_KEY: "saved-securely" },
+  );
+
+  assert.equal(environment.ELEVENLABS_API_KEY, "saved-securely");
+  assert.equal(environment.CHUDVIS_IDE_PORT, "49152");
+  assert.equal(environment.PATH, "host-path");
 });

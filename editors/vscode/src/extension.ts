@@ -23,6 +23,8 @@ import { StatusPresenter } from "./ui/status";
 import { parseChudvisInbound } from "./voice/protocol";
 
 let runtime: ExtensionRuntime | undefined;
+const ELEVENLABS_SECRET_KEY = "chudvis.elevenLabsApiKey";
+const ELEVENLABS_ENVIRONMENT_KEY = "ELEVENLABS_API_KEY";
 
 function bridgeOptions(): BridgeServerOptions {
   const configuration = vscode.workspace.getConfiguration("chudvis.bridge");
@@ -89,6 +91,12 @@ class ExtensionRuntime implements vscode.Disposable {
         case "calibrate":
           void this.startRuntimeMode("calibrate");
           return;
+        case "configureBackboard":
+          void this.configureBackboardApiKey();
+          return;
+        case "configureElevenLabs":
+          void this.configureElevenLabsApiKey();
+          return;
       }
       if (holder.coordinator !== undefined) {
         void holder.coordinator.handleAction(action);
@@ -112,6 +120,7 @@ class ExtensionRuntime implements vscode.Disposable {
       this.output,
       (detail) => this.report(detail),
       (mode, code) => this.runtimeExited(mode, code),
+      () => this.secretRuntimeEnvironment(),
     );
     context.subscriptions.push(
       this.output,
@@ -158,10 +167,16 @@ class ExtensionRuntime implements vscode.Disposable {
         void this.chudvis.cancel(true);
       }),
       vscode.commands.registerCommand("chudvis.configureBackboardKey", () =>
-        this.provider.configureApiKey(),
+        this.configureBackboardApiKey(),
       ),
       vscode.commands.registerCommand("chudvis.clearBackboardKey", () =>
-        this.provider.clearApiKey(),
+        this.clearBackboardApiKey(),
+      ),
+      vscode.commands.registerCommand("chudvis.configureElevenLabsKey", () =>
+        this.configureElevenLabsApiKey(),
+      ),
+      vscode.commands.registerCommand("chudvis.clearElevenLabsKey", () =>
+        this.clearElevenLabsApiKey(),
       ),
       vscode.commands.registerCommand("chudvis.clearEditingMemory", () =>
         this.chudvis.handleAction("clearMemory"),
@@ -222,6 +237,132 @@ class ExtensionRuntime implements vscode.Disposable {
     this.output.info(message);
     this.status.setDetail(message);
     this.bridge?.sendStatus(message);
+  }
+
+  private async savedElevenLabsApiKey(): Promise<string | undefined> {
+    const value = await this.context.secrets.get(ELEVENLABS_SECRET_KEY);
+    const key = value?.trim();
+    return key === undefined || key.length === 0 ? undefined : key;
+  }
+
+  private inheritedElevenLabsApiKey(): string | undefined {
+    const key = process.env[ELEVENLABS_ENVIRONMENT_KEY]?.trim();
+    return key === undefined || key.length === 0 ? undefined : key;
+  }
+
+  private async secretRuntimeEnvironment(): Promise<
+    Readonly<Record<string, string>>
+  > {
+    const key = await this.savedElevenLabsApiKey();
+    return key === undefined ? {} : { [ELEVENLABS_ENVIRONMENT_KEY]: key };
+  }
+
+  private async refreshServiceStatus(): Promise<void> {
+    try {
+      const [backboardConfigured, savedElevenLabs] = await Promise.all([
+        this.provider.hasApiKey(),
+        this.savedElevenLabsApiKey(),
+      ]);
+      const elevenLabsStatus =
+        savedElevenLabs !== undefined
+          ? "Key saved securely"
+          : this.inheritedElevenLabsApiKey() !== undefined
+            ? "Using VS Code host environment"
+            : "Not configured";
+      this.sidebar.setServiceStatus(
+        backboardConfigured ? "Key saved securely" : "Not configured",
+        elevenLabsStatus,
+      );
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error ? error.message : "secure storage unavailable";
+      this.output.warn(`Could not read service credentials: ${detail}`);
+      this.sidebar.setServiceStatus("Status unavailable", "Status unavailable");
+    }
+  }
+
+  private async configureBackboardApiKey(): Promise<boolean> {
+    try {
+      const configured = await this.provider.configureApiKey();
+      if (configured) {
+        this.report("Backboard API key validated and saved securely");
+        void vscode.window.showInformationMessage(
+          "Backboard is configured for Chudvis questions and code edits.",
+        );
+      }
+      return configured;
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error ? error.message : "Backboard setup failed";
+      this.report(detail);
+      void vscode.window.showErrorMessage(`Chudvis Backboard setup: ${detail}`);
+      return false;
+    } finally {
+      await this.refreshServiceStatus();
+    }
+  }
+
+  private async clearBackboardApiKey(): Promise<void> {
+    await this.provider.clearApiKey();
+    await this.refreshServiceStatus();
+    this.report("Backboard API key removed from VS Code secure storage");
+  }
+
+  private async configureElevenLabsApiKey(): Promise<boolean> {
+    const key = await vscode.window.showInputBox({
+      title: "Configure ElevenLabs API key",
+      prompt:
+        "Stored securely by VS Code and passed only to the native Chudvis process.",
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (value) =>
+        value.trim().length < 8
+          ? "Enter a valid ElevenLabs API key"
+          : undefined,
+    });
+    if (key === undefined) {
+      return false;
+    }
+    await this.context.secrets.store(ELEVENLABS_SECRET_KEY, key.trim());
+    await this.refreshServiceStatus();
+    this.report("ElevenLabs API key saved securely for the native runtime");
+    void vscode.window.showInformationMessage(
+      "ElevenLabs is configured. The key will be used the next time Chudvis controls start.",
+    );
+    return true;
+  }
+
+  private async clearElevenLabsApiKey(): Promise<void> {
+    await this.context.secrets.delete(ELEVENLABS_SECRET_KEY);
+    await this.refreshServiceStatus();
+    const inherited = this.inheritedElevenLabsApiKey() !== undefined;
+    this.report(
+      inherited
+        ? "Saved ElevenLabs key removed; the VS Code host environment key remains active"
+        : "ElevenLabs API key removed from VS Code secure storage",
+    );
+  }
+
+  private async confirmElevenLabsSetup(): Promise<boolean> {
+    const voiceEnabled = vscode.workspace
+      .getConfiguration("chudvis.runtime")
+      .get<boolean>("voice", true);
+    if (
+      !voiceEnabled ||
+      (await this.savedElevenLabsApiKey()) !== undefined ||
+      this.inheritedElevenLabsApiKey() !== undefined
+    ) {
+      return true;
+    }
+    const action = await vscode.window.showWarningMessage(
+      "ElevenLabs is not configured. Wake-word realtime speech will be unavailable; gaze, gestures, and local thumbs-up dictation can still run.",
+      "Set ElevenLabs Key",
+      "Start with Local Fallback",
+    );
+    if (action === "Set ElevenLabs Key") {
+      return this.configureElevenLabsApiKey();
+    }
+    return action === "Start with Local Fallback";
   }
 
   private async dispatch(notification: BridgeNotification): Promise<void> {
@@ -385,6 +526,9 @@ class ExtensionRuntime implements vscode.Disposable {
         return;
       }
     }
+    if (!(await this.confirmElevenLabsSetup())) {
+      return;
+    }
     if (!(await this.startBridge(allowEphemeralPort))) {
       return;
     }
@@ -463,6 +607,7 @@ class ExtensionRuntime implements vscode.Disposable {
 
   public initialize(): void {
     this.setControlsRunning(false);
+    void this.refreshServiceStatus();
     const shortcut = process.platform === "darwin" ? "Cmd+Alt+G" : "Ctrl+Alt+G";
     void vscode.window
       .showInformationMessage(

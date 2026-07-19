@@ -13,15 +13,16 @@ terminal or `uv run` command is not required after the extension is installed.
 
 Use `Ctrl+Alt+G` on Windows/Linux or `Cmd+Alt+G` on macOS to toggle all live controls. Clicking the
 Chudvis status-bar item performs the same toggle. The sidebar includes synchronized **Start/Stop
-Controls**, **Test Tracking**, and **Recalibrate Gaze** buttons, plus a visible guide to every gaze,
-hand, voice, and keyboard action. Every guide entry explicitly labels its hand assignment; editor
-defaults to the physical right hand, navigator defaults to the physical left hand, and the
-pause/cancel hold accepts either hand.
+Controls**, **Test Tracking**, and **Recalibrate Gaze** buttons. Its compact hand table groups inputs
+under no hand, editor hand (physical right by default), navigator hand (physical left by default),
+or either hand.
 
-Use **Chudvis: Configure Backboard API Key** to store the provider key in VS Code SecretStorage.
-The sidebar shows microphone/request state, partial transcripts, answers, edit targets, applied
-summaries, review actions, Undo, and Clear Memory. Basic navigation and questions remain silent;
-only a successful code edit (or short edit failure) can produce an ElevenLabs TTS response.
+The sidebar also shows Backboard and ElevenLabs setup status. Enter either key there or use the
+matching **Configure ... API Key** command; both are stored in VS Code SecretStorage. The saved
+ElevenLabs key is injected only into the supervised native process. Workspace `.env` files are not
+loaded. The sidebar also shows microphone/request state, partial transcripts, answers, edit targets,
+applied summaries, review actions, Undo, and Clear Memory. Basic navigation and questions remain
+silent; only a successful code edit (or short edit failure) can produce an ElevenLabs TTS response.
 
 The bridge listens only on the configured loopback address. Camera frames, microphone audio,
 source code, full transcripts, provider reasoning, API keys, and TTS bytes are not written to the
